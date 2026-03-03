@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import click
-from config.settings import VIDEOS_JSON, GENERATED_DIR, TRANSCRIPTS_DIR
+from config.settings import VIDEOS_JSON, GENERATED_DIR, TRANSCRIPTS_DIR, DATA_DIR
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -35,6 +35,24 @@ def discover(force, url):
     from config.settings import CHANNEL_URL
     videos = discover_videos(url or CHANNEL_URL, force=force)
     click.echo(f"\n{len(videos)} videos saved to {VIDEOS_JSON}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# descriptions — fetch full descriptions for all discovered videos
+# ─────────────────────────────────────────────────────────────────────────────
+
+@cli.command()
+@click.option("--force", is_flag=True, help="Re-fetch even if description already cached")
+def descriptions(force):
+    """Fetch current YouTube descriptions for all videos (fills left pane in review GUI)."""
+    from r4v.channel import fetch_descriptions
+    from r4v.storage import load_json
+    if force:
+        # Clear existing descriptions so all are re-fetched
+        videos = load_json(VIDEOS_JSON) or []
+        for v in videos:
+            v["description"] = ""
+    fetch_descriptions()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -65,7 +83,7 @@ def transcripts(force, video_id):
     ids = [v["id"] for v in videos]
     results = fetch_all_transcripts(ids, force=force)
     ok = sum(1 for v in results.values() if v is not None)
-    click.echo(f"\nTranscripts: {ok}/{len(ids)} fetched → {TRANSCRIPTS_DIR}")
+    click.echo(f"\nTranscripts: {ok}/{len(ids)} fetched -> {TRANSCRIPTS_DIR}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -78,7 +96,7 @@ def transcripts(force, video_id):
 def generate(force, video_id):
     """Generate AI metadata (title, description, tags, hashtags) for all videos."""
     from r4v.storage import load_json
-    from r4v.transcript import fetch_transcript
+    from r4v.transcript import fetch_transcript  # used for --video-id single-video path
     from r4v.content_gen import generate_metadata, generate_all
 
     videos = load_json(VIDEOS_JSON) or []
@@ -96,6 +114,7 @@ def generate(force, video_id):
             video_id,
             t["text"],
             existing_title=video.get("title", ""),
+            existing_description=video.get("description", ""),
             transcript_urls=t.get("urls", []),
             force=force,
         )
@@ -104,15 +123,18 @@ def generate(force, video_id):
         click.echo(f"  Comment:  {meta['comment']}")
         return
 
-    # Load all cached transcripts
+    # Load only cached transcripts — never attempt live fetches during generate
+    from r4v.storage import load_json as _load_json
     transcripts_map = {}
     for v in videos:
-        t = fetch_transcript(v["id"])
-        if t:
-            transcripts_map[v["id"]] = t
+        cache_path = TRANSCRIPTS_DIR / f"{v['id']}.json"
+        if cache_path.exists():
+            t = _load_json(cache_path)
+            if t:
+                transcripts_map[v["id"]] = t
 
     results = generate_all(videos, transcripts_map, force=force)
-    click.echo(f"\nGenerated metadata for {len(results)} videos → {GENERATED_DIR}")
+    click.echo(f"\nGenerated metadata for {len(results)} videos -> {GENERATED_DIR}")
     click.echo("Open review.pyw to review and approve changes before pushing.")
 
 
@@ -196,16 +218,139 @@ def engage(dry_run, video_id):
         click.echo("No approved videos. Approve some in review.pyw first.")
         return
 
-    # Build comment map
+    # Build comment map — skip videos flagged as needing JT's personal comment
     comment_map = {}
+    jt_skipped = []
     for vid in approved_ids:
         meta = load_json(GENERATED_DIR / f"{vid}_metadata.json")
-        if meta and meta.get("comment"):
+        if not meta:
+            continue
+        if meta.get("needs_jt_comment"):
+            jt_skipped.append(vid)
+            continue
+        if meta.get("comment"):
             comment_map[vid] = meta["comment"]
+
+    if jt_skipped:
+        click.echo(f"  Skipping {len(jt_skipped)} video(s) flagged 'Needs JT Comment': "
+                   f"{', '.join(jt_skipped)}")
 
     click.echo(f"{'DRY RUN — ' if dry_run else ''}Engaging {len(approved_ids)} video(s)...")
     service = get_youtube_service()
     run_engagement(service, approved_ids, comment_map, dry_run=dry_run)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# check — background check used by Windows Scheduled Task
+# ─────────────────────────────────────────────────────────────────────────────
+
+@cli.command()
+@click.option("--force", is_flag=True, help="Run even if checked recently")
+def check(force):
+    """Background check: discover new videos, fetch missing transcripts, auto-generate.
+
+    Writes data/check_state.json so review.pyw can notify you on next open.
+    Scheduled to run every 4 hours via Windows Task Scheduler (setup_task.py).
+    """
+    import datetime
+    from r4v.channel import discover_videos
+    from r4v.transcript import fetch_all_transcripts
+    from r4v.content_gen import generate_all
+    from r4v.storage import load_json, save_json
+    from config.settings import CHANNEL_URL
+
+    MIN_INTERVAL_HOURS = 3
+    state_path = DATA_DIR / "check_state.json"
+
+    # Guard: skip if checked recently (Task Scheduler fires every 4h but guard
+    # against double-runs from manual invocation or scheduler overlap)
+    if not force:
+        prev = load_json(state_path) or {}
+        last_check = prev.get("last_check_iso", "")
+        if last_check:
+            try:
+                last_dt = datetime.datetime.fromisoformat(last_check)
+                age_h = (datetime.datetime.now() - last_dt).total_seconds() / 3600
+                if age_h < MIN_INTERVAL_HOURS:
+                    click.echo(
+                        f"Last check was {age_h:.1f}h ago — skipping "
+                        f"(min interval {MIN_INTERVAL_HOURS}h). Use --force to override."
+                    )
+                    return
+            except ValueError:
+                pass
+
+    # 1. Discover — note which IDs are genuinely new
+    click.echo("[1/3] Discovering videos...")
+    known_ids = {v["id"] for v in (load_json(VIDEOS_JSON) or [])}
+    videos = discover_videos(CHANNEL_URL, force=False)
+    new_ids = [v["id"] for v in videos if v["id"] not in known_ids]
+    if new_ids:
+        click.echo(f"  ✓ {len(new_ids)} new video(s): {', '.join(new_ids)}")
+    else:
+        click.echo(f"  No new videos ({len(videos)} known)")
+
+    # 2. Transcripts — only attempt ones still missing
+    click.echo("[2/3] Fetching missing transcripts...")
+    missing_t = [
+        v["id"] for v in videos
+        if not (TRANSCRIPTS_DIR / f"{v['id']}.json").exists()
+    ]
+    if missing_t:
+        t_results = fetch_all_transcripts(missing_t, force=False)
+        newly_transcribed = [vid for vid, t in t_results.items() if t is not None]
+        still_missing = [vid for vid in missing_t if vid not in newly_transcribed]
+        click.echo(f"  ✓ Fetched: {len(newly_transcribed)}  Still missing: {len(still_missing)}")
+    else:
+        newly_transcribed = []
+        still_missing = []
+        click.echo("  All transcripts already cached")
+
+    # 3. Generate — only for newly transcribed videos without existing metadata
+    click.echo("[3/3] Generating metadata for newly transcribed videos...")
+    to_generate = [
+        v for v in videos
+        if v["id"] in newly_transcribed
+        and not (GENERATED_DIR / f"{v['id']}_metadata.json").exists()
+    ]
+    if to_generate:
+        trans_map = {}
+        for v in to_generate:
+            t = load_json(TRANSCRIPTS_DIR / f"{v['id']}.json")
+            if t:
+                trans_map[v["id"]] = t
+        gen_results = generate_all(to_generate, trans_map)
+        newly_generated = list(gen_results.keys())
+        click.echo(f"  ✓ Generated: {len(newly_generated)}")
+    else:
+        newly_generated = []
+        click.echo("  Nothing new to generate")
+
+    # 4. Count all pending review
+    pending_review = []
+    for p in GENERATED_DIR.glob("*_metadata.json"):
+        meta = load_json(p)
+        if meta and meta.get("approved") is None:
+            pending_review.append(p.stem.replace("_metadata", ""))
+
+    # 5. Save state (preserve last_notified_iso so popup logic stays correct)
+    prev_state = load_json(state_path) or {}
+    state = {
+        "last_check_iso": datetime.datetime.now().isoformat(timespec="seconds"),
+        "new_video_ids": new_ids,
+        "newly_generated": newly_generated,
+        "needs_transcript": still_missing,
+        "total_pending_review": len(pending_review),
+        "last_notified_iso": prev_state.get("last_notified_iso"),
+    }
+    save_json(state_path, state)
+
+    click.echo(
+        f"\nDone — {len(new_ids)} new | {len(newly_generated)} generated | "
+        f"{len(still_missing)} need transcripts | {len(pending_review)} pending review"
+    )
+    if pending_review:
+        click.echo("Open review.pyw to review and approve.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,174 @@
+{
+  "_note": "Edit this file to refine AI-generated content. Add real JT quotes, update Gavin preferences. No code changes needed.",
+
+  "jt": {
+    "full_name": "JT Tracy",
+    "role": "Rider and channel owner — @roll4veterans",
+    "background": "Veteran. Cycling 4,463 miles across America (Key West → Los Angeles → Flagstaff) Feb 27 – Jun 21, 2026. Supporting veterans through Team Red, White & Blue (Team RWB). Rides with his dog Boog sometimes. Pulls a trailer with Roll4Veterans signage — flags fly, people stop to ask what's going on, and he talks to every one of them. Looking for a volunteer driver so he can ride every mile in a straight line.",
+
+    "signature_opener": "Hello friend!",
+    "opener_variants": [
+      "Hello friend!",
+      "Hey there, friend.",
+      "Hi there friend.",
+      "Hello friend."
+    ],
+    "signature_closer": "Roll for veterans.",
+    "closer_variants": [
+      "Roll for veterans.",
+      "Roll for veterans and I'll see you out on the path.",
+      "...and I can't wait to see what happens."
+    ],
+
+    "catchphrases": [
+      "Not just riding through the community, but connecting with the community.",
+      "That's what it's all about.",
+      "Roll for veterans.",
+      "Team Bravo salute — B in sign language, because the A-Team was taken by Hannibal and Mr. T.",
+      "I can't wait to see what happens.",
+      "As long as you get the miles in, you're good.",
+      "Sunshine and happiness.",
+      "It's my honor."
+    ],
+
+    "how_he_introduces_people": "He asks them to introduce themselves on camera, then follows up with specific questions: how long they served, what they did, how long they've been at their post or role. He always thanks them for their service sincerely.",
+
+    "voice_traits": [
+      "Warm and direct — talks to the camera like a friend, not an audience",
+      "Genuinely curious about everyone he meets",
+      "Self-deprecating humor — admits mistakes, laughs at himself",
+      "Grateful — thanks people sincerely, not performatively",
+      "Practical — talks through gear problems, logistics, what he's going to do tomorrow",
+      "Notices small beautiful things — a street name, a shady parking spot, the weather forecast",
+      "Never preachy about veterans or the mission — just shows it through action and connection",
+      "Comfortable with silence and rambling — doesn't over-edit himself in speech",
+      "Gives people nicknames: 'Mr. Chopsticks', 'Boog'",
+      "Humor is understated and situational — comes from real moments, not setups"
+    ],
+
+    "speaking_patterns": [
+      "Uses 'uh', 'um', 'you know' naturally — don't write these into descriptions but capture the casual feel",
+      "Addresses the viewer directly mid-thought: 'right?', 'you know?', 'isn't that romantic?'",
+      "Builds to a point conversationally rather than stating it upfront",
+      "Ends with a call to action or a forward-looking line, then the closer",
+      "Uses 'sir' respectfully when addressing veterans",
+      "Says 'I appreciate all that service' — a real phrase he uses",
+      "Describes what he's going to do next: 'tomorrow I'm going to...' — forward momentum"
+    ],
+
+    "what_he_notices": [
+      "Names and titles of everyone he meets — always",
+      "How long someone served and what they did",
+      "Street names and specific locations",
+      "Weather — especially if it's beautiful or about to turn",
+      "The little logistical details of the ride (where he parked, what he fixed, what he still needs to figure out)",
+      "When a moment is funny or unexpected",
+      "Who signed the trailer and what they wrote"
+    ],
+
+    "real_quotes_from_transcripts": [
+      "Hello friend. We're southbound headed toward Key West.",
+      "Hey there, friend. I thought I'd start this one out close to the water.",
+      "Hi there friend. I am here in Okinawa. It's a ramen and hibachi place in Tampa, Florida.",
+      "Not just riding through the community, but connecting with the community.",
+      "I can't really envision doing this ride without this truck and that trailer back there.",
+      "I'm starting something called Team Bravo — because the A-Team was taken by Hannibal and Mr. T.",
+      "I appreciate all that service and everything you've done for your country and you continue to give.",
+      "Ocean Bay Drive and Seagull Boulevard. Isn't that romantic?",
+      "They survived Hurricane Irma. That's how strong they are.",
+      "I got Captain Sanchez — 19 years in firefighting. Javon, he just started, a couple months ago. And then Victor, he was in the Marine Corps.",
+      "Can't we all get along?",
+      "Most people just say be safe — but 'wear reflective clothing' is an actual thing I can do.",
+      "Excited and a little bit nervously apprehensive about how it's all going to go.",
+      "Roll for veterans and I'll see you out on the path — cuz this thing is just getting started and I can't wait to see what happens.",
+      "Sunshine and happiness.",
+      "Hey, Boog. Say hi to the peeps."
+    ],
+
+    "avoid_in_descriptions": [
+      "Don't say 'In this captivating short...' or 'Join JT as he...'",
+      "Don't use hollow phrases like 'inspiring journey' or 'meaningful connections' without specifics",
+      "Don't use corporate vocabulary: 'content creator', 'platform', 'engagement', 'impactful'",
+      "Don't list things with bullets or bold section headers in the description body",
+      "Don't start any paragraph (other than the opener) with 'Hello friend!'",
+      "Don't make the veteran mission sound like a slogan — show it through real moments",
+      "Don't invent details not in the transcript"
+    ],
+
+    "hashtag_guidance": {
+      "_note": "Add or remove hashtags from the pools below — no code changes needed.",
+
+      "always_include": [
+        "#RollForVeterans",
+        "#R4V",
+        "#TeamRWB"
+      ],
+
+      "evergreen_pool": [
+        "#Veterans",
+        "#VeteranCommunity",
+        "#SupportVeterans",
+        "#VeteranLife",
+        "#MilitaryVeteran",
+        "#CyclingLife",
+        "#BikeLife",
+        "#CyclingForGood",
+        "#AdventureCycling",
+        "#CrossCountryCycling",
+        "#BikeTour",
+        "#RideForACause",
+        "#KeyWest",
+        "#Florida",
+        "#AmericanLegion",
+        "#TeamRWBNation",
+        "#EagleNation",
+        "#EagleFire",
+        "#GWOT100",
+        "#WODforWarriors",
+        "#MissionRide",
+        "#R4V2026"
+      ],
+
+      "location_hashtags": {
+        "_note": "Add #StateName or #CityName only when the transcript clearly mentions that location.",
+        "examples": ["#Florida", "#Georgia", "#Alabama", "#Mississippi", "#Louisiana", "#Texas", "#NewMexico", "#Arizona", "#California"]
+      },
+
+      "content_specific_rules": [
+        "Add a hashtag for a person's branch only if mentioned in the transcript: #USArmy #USNavy #USMC #USAirForce #CoastGuard",
+        "Add #AmericanLegion or #VFW only if JT visits one in the video",
+        "Add #FireFighter or #FirstResponders only if a firefighter/first responder appears",
+        "Add location hashtags only for places actually mentioned",
+        "NEVER invent hashtags for topics not in the transcript",
+        "NEVER use hashtags for pop culture, celebrities, trends, or anything unrelated to cycling/veterans/the ride",
+        "NEVER use a hashtag that has fewer than ~10k posts or is clearly niche/dead (#Cleopatra, #TeamBravo, etc.)",
+        "Aim for 12-16 total hashtags: 3 always-include + 5-7 from evergreen pool + 4-6 content-specific"
+      ]
+    }
+  },
+
+  "gavin": {
+    "full_name": "Gavin Homeland",
+    "role": "Channel manager and editor for @roll4veterans",
+    "relationship_to_jt": "Gavin manages the channel on JT's behalf. JT is on the road; Gavin reviews AI-generated descriptions, edits them to match JT's voice, and approves them before publishing. He has full permission to write and post in JT's voice.",
+
+    "editorial_priorities": [
+      "Sounds like JT — warm, direct, specific, not AI-generic",
+      "Uses real names and details from the transcript",
+      "Flows naturally — no bullet lists or bold headers in the description body",
+      "Starts with 'Hello friend!' + emoji, always",
+      "Ends with a genuine call to action or forward-looking line",
+      "Short enough to be readable on mobile, rich enough to be worth reading"
+    ],
+
+    "things_gavin_fixes": [
+      "AI descriptions that are too flat or generic — he wants concrete details",
+      "Missing 'Hello friend!' opener",
+      "Overly structured text with headers and lists",
+      "Comments that don't start with 'Hello friend!'",
+      "Titles that are too long or too generic"
+    ],
+
+    "communication_style": "Direct, concise. Prefers less structure in output. Trusts his own judgment on JT's voice after reviewing enough content."
+  }
+}

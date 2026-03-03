@@ -8,7 +8,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
 # ── API credentials ────────────────────────────────────────────────────────────
-ANTHROPIC_API_KEY: str = os.environ.get("ANTHROPIC_API_KEY", "")
+GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")
 YOUTUBE_CHANNEL_ID: str = os.environ.get("YOUTUBE_CHANNEL_ID", "")
 
 # ── File paths ─────────────────────────────────────────────────────────────────
@@ -22,6 +22,7 @@ QUOTA_LOG_JSON = DATA_DIR / "quota_log.json"
 CONFIG_DIR = PROJECT_ROOT / "config"
 CLIENT_SECRET_FILE = CONFIG_DIR / "client_secret.json"
 TOKEN_FILE = CONFIG_DIR / "token.json"
+COOKIES_FILE = CONFIG_DIR / "cookies.txt"  # optional — export from browser to bypass IP bans
 
 # ── YouTube API ────────────────────────────────────────────────────────────────
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]
@@ -35,13 +36,12 @@ QUOTA_VIDEOS_UPDATE = 50
 QUOTA_COMMENTS_INSERT = 50
 QUOTA_VIDEOS_RATE = 50
 
-# ── Claude AI ──────────────────────────────────────────────────────────────────
-CLAUDE_MODEL = "claude-sonnet-4-6"
+# ── Gemini AI ──────────────────────────────────────────────────────────────────
+GEMINI_MODEL = "gemini-2.5-flash-lite"
 
 # ── R4V brand content ──────────────────────────────────────────────────────────
 FOOTER_TEMPLATE = """\
 
----
 JOIN THE CONVERSATION
 Have a story to share? Want to support veterans? Interested in the ride?
 📱 FB/IG/TT/YT: @roll4veterans

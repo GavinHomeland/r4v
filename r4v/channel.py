@@ -55,6 +55,51 @@ def discover_videos(channel_url: str = CHANNEL_URL, force: bool = False) -> list
     return videos
 
 
+def fetch_descriptions(videos: list[dict] | None = None) -> list[dict]:
+    """Fetch full descriptions for videos where description is empty.
+
+    Uses yt-dlp per-video (not flat-playlist) so descriptions are included.
+    Updates and saves videos.json in-place. Returns the updated list.
+    """
+    if videos is None:
+        videos = load_json(VIDEOS_JSON) or []
+
+    missing = [v for v in videos if not v.get("description")]
+    if not missing:
+        print("[channel] All videos already have descriptions.")
+        return videos
+
+    print(f"[channel] Fetching descriptions for {len(missing)} videos ...")
+    for i, v in enumerate(missing, 1):
+        vid_id = v["id"]
+        print(f"[channel] {i}/{len(missing)} {vid_id} ...", end=" ", flush=True)
+        cmd = [
+            sys.executable, "-m", "yt_dlp",
+            "--dump-json", "--no-warnings",
+            "--no-playlist",
+            f"https://www.youtube.com/shorts/{vid_id}",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        if result.returncode != 0 or not result.stdout.strip():
+            print("FAILED")
+            continue
+        try:
+            info = json.loads(result.stdout.strip().splitlines()[0])
+        except Exception:
+            print("PARSE ERROR")
+            continue
+        desc = info.get("description", "")
+        tags = info.get("tags") or []
+        v["description"] = desc
+        if tags and not v.get("tags"):
+            v["tags"] = tags
+        print(f"ok ({len(desc)} chars)")
+
+    save_json(VIDEOS_JSON, videos)
+    print(f"[channel] Saved updated videos.json")
+    return videos
+
+
 def get_new_videos(channel_url: str = CHANNEL_URL) -> list[dict]:
     """Re-fetch and return only videos not already in cache."""
     existing_ids = {v["id"] for v in (load_json(VIDEOS_JSON) or [])}
