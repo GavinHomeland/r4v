@@ -51,7 +51,7 @@ def discover_videos(channel_url: str = CHANNEL_URL, force: bool = False) -> list
         })
 
     save_json(VIDEOS_JSON, videos)
-    print(f"[channel] Found {len(videos)} videos → saved to {VIDEOS_JSON}")
+    print(f"[channel] Found {len(videos)} videos -> saved to {VIDEOS_JSON}")
     return videos
 
 

@@ -33,10 +33,16 @@ W:\r4v\
 ```
 
 ## Workflow (normal operation)
-1. `python cli.py pipeline` — discover + transcripts + generate
-2. Open `review.pyw` — review/edit AI output, click Approve or Skip per video
-3. Click "Push Approved → YouTube" in the GUI (or `python cli.py push`)
-4. `python cli.py engage` — post likes + comments on approved videos
+1. Open `review.pyw` → click **Pipeline ▸** (action bar) — discover + generate for new videos
+2. Review/edit AI output, click Approve or Skip per video
+3. Click **Push Approved → YouTube** in the action bar (or `python cli.py push`)
+4. Click **Engage** in the action bar — post likes + comments on approved videos
+
+## Scheduled background check
+- `setup_task.py` registers a Windows Task Scheduler job (every 4 h) that runs `cli.py check`
+- `check` discovers new videos, fetches missing transcripts, generates metadata for newly transcribed
+- On next `review.pyw` open, a popup appears if new activity was found
+- run_check.ps1 → called by the task scheduler
 
 ## CLI commands
 | Command | What it does |
@@ -83,8 +89,22 @@ Have a story to share? Want to support veterans? Interested in the ride?
 - ~30 videos × 50 units = 1,500 units per full pass (15% of limit)
 - Quota tracked in data/quota_log.json
 
+## review.pyw UI layout
+**Row 1 (toolbar):** Title · Filter ▼ · ◀ N/Total ▶ · Jump combo · More ▼
+**Row 2 (action bar, wraps on resize):**
+`[Pipeline ▸]` `[Fetch Descs]` `[Transcripts]` | `[Push Approved→YouTube]` `[Engage]` | `[🎭 Personality]` | `[? Help]` `[Exit]`
+**More ▼ menu:** Push Dry-Run · Engage Dry-Run · Check Quota · Reload · ↺ Reset
+**Card area:** one video at a time; ◀/▶ navigate (disabled + non-clickable at boundaries)
+**Proc bar:** progress bar + status text (above bottom)
+**Status bar (very bottom):** Videos: N | With metadata: N | Approved: N | …
+
+## Per-card field buttons
+- `⚡` — regenerate just that field via Gemini AI (opens prompt editor)
+- `🔗` — apply canonical description footer (settings.py FOOTER_TEMPLATE) preserving existing extra links
+- `»` — copy current YouTube value into Proposed field
+
 ## Key dependencies
-- `anthropic` — Claude API (claude-sonnet-4-6)
+- `google-generativeai` (google-genai SDK) — Gemini AI content generation
 - `google-api-python-client` / `google-auth-oauthlib` — YouTube Data API
 - `youtube-transcript-api` — transcript reading (no API key needed)
 - `yt-dlp` — channel video discovery (no API quota cost)
@@ -95,3 +115,23 @@ Have a story to share? Want to support veterans? Interested in the ride?
 - Auto-generated captions on Shorts can be low quality — verify critical content
 - YouTube API won't let you update categoryId to an invalid value; default is 22 (People & Blogs)
 - OAuth consent screen must include your Google account as a test user while app is in "Testing"
+- IP rate-limit from YouTube on transcript fetching: wait 2-4 h, then use Transcripts button or scheduled check
+
+## To do from Papa. Verify if unclear. 
+- In the descriptions, a reference to an entity like 10BitWorks should be an inline hyperlink, if possible (if YouTube accepts hyperlinks like that... I think it does.). - Also, put a links section in the footer with clickable links.
+- Put a button on the dash to bring up personalities.json for edit.
+- Items under Join the Conversation are links.
+- Answer these questions in papa.md
+    -- Is there a difference between "Tags" (on the dashboard) and "Hashtags"? 
+    -- How can I programmatically push Thumbs Up on all the videos?
+    -- How can I queue all videos to play (watch all the way thru for metrics) in the bg? How do I make and maintain (add new videos) to a playlist?
+    -- Do I need a new Google Cloud cred file after adding JT's email address?
+- The comment didn't post (under any id) in the video that I approved and pushed. The description and all did update, so that's good. I've added JT's email address as a tester in the Google Cloud dashboard thingie. I still need to try the procedure outlined in papa.md, but the engage button should do something.
+Review this information and implement concepts that make sense for us, including getting around the IP bans. https://github.com/jdepoix/youtube-transcript-api?tab=readme-ov-file#working-around-ip-bans-requestblocked-or-ipblocked-exception
+    -- w:\r4v\Webshare 10 proxies.txt
+    -- https://proxy.webshare.io/api/v2/proxy/list/download/qyzcfmfyeowzdhqmtutihqifoiebhihebayhdifb/-/any/username/direct/-/?plan_id=12908472
+- The most important ones to be worked on are in UNLISTED status. How can that be prioritized?
+- I added cookies.txt to /config. Is it working correctly?
+- Put a tooltip on the little icons in the boxes (lightning bolt). Everything should have a tooltip telling what it does. 
+- Videos shown on the YouTube Visibility field as "unlsted" are the highest priority. I'd like to filter those.
+- I'd like to be able to do a search for the current title of a video.

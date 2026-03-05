@@ -10,8 +10,8 @@
     "opener_variants": [
       "Hello friend!",
       "Hey there, friend.",
-      "Hi there friend.",
-      "Hello friend."
+      "Hi there, friend.",
+      "Hello, friend."
     ],
     "signature_closer": "Roll for veterans.",
     "closer_variants": [
@@ -156,7 +156,7 @@
       "Sounds like JT — warm, direct, specific, not AI-generic",
       "Uses real names and details from the transcript",
       "Flows naturally — no bullet lists or bold headers in the description body",
-      "Starts with 'Hello friend!' + emoji, always",
+      "Starts with 'Hello friend!' (or other in list) + emoji, always",
       "Ends with a genuine call to action or forward-looking line",
       "Short enough to be readable on mobile, rich enough to be worth reading"
     ],

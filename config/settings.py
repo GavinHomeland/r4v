@@ -42,10 +42,28 @@ GEMINI_MODEL = "gemini-2.5-flash-lite"
 # ── R4V brand content ──────────────────────────────────────────────────────────
 FOOTER_TEMPLATE = """\
 
-JOIN THE CONVERSATION
+
+JOIN THE CONVERSATION 🔗 🤝 🔗
 Have a story to share? Want to support veterans? Interested in the ride?
-📱 FB/IG/TT/YT: @roll4veterans
-🌐 Website: r4v.songseekers.org{extra_links}
+
+📱 @roll4veterans — Follow the mission across platforms:
+   • Facebook: https://facebook.com/roll4veterans
+   • Instagram: https://instagram.com/roll4veterans
+   • TikTok: https://tiktok.com/@roll4veterans
+   • YouTube: https://youtube.com/@roll4veterans
+
+🌐 Official Hub: https://r4v.songseekers.org
+   • Ride updates, route maps, and real-time tracking.
+
+🦅 Team Red, White & Blue: https://teamrwb.org
+   • Connecting veterans through physical and social activity.
+
+🤝 Support & Donate:
+   • Mission Fund: https://gofund.me/fdff623ca
+   • Team RWB Donation: https://www.zeffy.com/en-US/team/roll-for-veterans
+   • Volunteer (Team Bravo): https://r4v.songseekers.org/team-bravo
+
+🚴 Follow the ride on Strava: https://strava.app.link/hW78V3J2u0b
 
 {hashtags}"""
 

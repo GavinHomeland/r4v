@@ -44,15 +44,16 @@ Run via `Ctrl+Shift+P` → **Tasks: Run Task** — all R4V tasks are listed ther
 ## TODO Items
 
 ### Right Now (no extra setup needed)
-- [ ] Wait for IP ban to lift (2-4 hrs), then run `R4V: Fetch transcripts` — 37/92 cached, 55 remaining
-- [ ] Run `R4V: Generate metadata (AI)` — can run now on the 37 already fetched
+- [x] Wait for IP ban to lift (2-4 hrs), then run `R4V: Fetch transcripts` — 37/92 cached, 55 remaining
+- [x] Run `R4V: Generate metadata (AI)` — can run now on the 37 already fetched
 - [ ] Open `R4V: Open review GUI` — approve / edit AI output
+- [ ] Add donate to RWB in the JOIN THE CONVERSATION section (https://www.zeffy.com/en-US/team/roll-for-veterans)
 
 ### Before You Can Push to YouTube
 - [x] Google Cloud Console OAuth setup done — `config/client_secret.json` saved
 - [x] First-run OAuth browser login done — `config/token.json` saved (hellochauncy account)
-- [ ] **Re-do OAuth with etracyjob@gmail.com** — current token uses wrong account (no channel edit rights)
-- [ ] Run `R4V: Push to YouTube` first batch of approved metadata
+- [x] **Re-do OAuth with etracyjob@gmail.com** — current token uses wrong account (no channel edit rights)
+- [x] Run `R4V: Push to YouTube` first batch of approved metadata
 
 ### Medium Priority
 - [ ] Verify transcript quality for all videos (Shorts auto-captions can be rough)
@@ -91,31 +92,32 @@ Check current usage: `R4V: Check quota` (via Ctrl+Shift+P → Tasks: Run Task)
 ## Daily Workflow (once set up)
 
 **Normal session — process new videos:**
-1. `R4V: Full pipeline (new only)`
-2. `R4V: Open review GUI` — approve / edit in GUI
-3. `R4V: Push to YouTube`
+1. Open `review.pyw` (double-click or `R4V: Open review GUI`)
+2. Click **Pipeline ▸** in the action bar — processes new videos with a live log window
+3. Review/edit AI output in each card; click ✓ Approve or ✗ Skip
+4. Click **Push Approved → YouTube**
 
-**First-time / full refresh:**
-1. `R4V: Fetch transcripts`
-2. `R4V: Generate metadata (AI)`
-3. `R4V: Open review GUI`
-4. `R4V: Push dry-run` then `R4V: Push to YouTube`
+**First-time / full refresh (no scheduled task):**
+1. `R4V: Fetch transcripts` (may need multiple runs if IP-blocked)
+2. `R4V: Generate metadata (AI)` or use **Pipeline ▸** button
+3. Open `review.pyw` → review → approve
+4. Click **Push Approved → YouTube**
 
 ---
 
-## Windows Task Scheduler Setup (optional automation)
+## Windows Task Scheduler (automated background check)
 
-Create `W:\r4v\run_pipeline.bat`:
-```bat
-@echo off
-W:\r4v\.venv\Scripts\python.exe W:\r4v\cli.py pipeline --new-only >> W:\r4v\data\pipeline.log 2>&1
+Already set up via `setup_task.py`. Runs every 4 hours:
+- Discovers new videos, fetches missing transcripts, generates AI metadata
+- Writes `data/check_state.json` — review.pyw shows a popup on next open if there's new activity
+
+**Manage the task:**
 ```
-
-In Task Scheduler:
-- Create Basic Task → "R4V Daily Pipeline"
-- Trigger: Daily, 6:00 AM
-- Action: Start a program → `W:\r4v\run_pipeline.bat`
-- Run whether logged in or not
+Run now:  schtasks /Run /TN "R4V YouTube Check"
+Status:   schtasks /Query /TN "R4V YouTube Check" /V /FO LIST
+Remove:   schtasks /Delete /TN "R4V YouTube Check" /F
+Re-setup: python setup_task.py
+```
 
 Note: Push still requires manual review/approval in `review.pyw` — never automate push without human review.
 
@@ -183,3 +185,51 @@ For everything else: Gavin reviews + edits the AI comment in the COMMENT field, 
 | `json.JSONDecodeError` from Gemini | Gemini returned non-JSON; run generate with `--force --video-id=<id>` to retry |
 | review.pyw won't open | Run `.venv\Scripts\python.exe W:\r4v\review.pyw` from a terminal to see errors |
 | Gemini 404 model error | Check `config/settings.py` — model must be `gemini-2.5-flash-lite` |
+ 
+ ## Notes:
+ In 2026, YouTube’s algorithm has shifted away from simply counting "vanity metrics" (like likes and subscribes) toward a deeper focus on **viewer satisfaction** and **AI-driven intent matching**.
+
+While likes, shares, and subscribes still play a role, they are now secondary to how well your video actually serves the person watching it. Here is the hierarchy of what increases visibility today:
+
+### 1. The "Big Two": Satisfaction & Retention
+
+The algorithm no longer just asks, "Did they click?" It asks, "Was it worth their time?"
+
+* **Average View Duration (AVD):** This is the single strongest signal. If people stay for 70% of your video, YouTube will push it to thousands more. If they leave in 10 seconds, the video "dies."
+* **Viewer Satisfaction Surveys:** YouTube now regularly serves "Was this video a good use of your time?" surveys. High satisfaction scores can make a video go viral even if it has fewer likes than others.
+* **"Hype" Feature:** For channels under 500k subscribers, the new **Hype** button allows fans to physically boost a video’s visibility on regional leaderboards, giving smaller creators a significant organic lift.
+
+### 2. Click-Through Rate (CTR) vs. Substance
+
+While your thumbnail and title must be "clickable," the AI now analyzes your video frame-by-frame.
+
+* **AI Contextual Awareness:** YouTube's AI "watches" your video to see if the content actually matches the title. If you use clickbait that doesn't deliver, the algorithm will detect the "disconnect" and stop recommending you, regardless of your CTR.
+* **Thumbnail A/B Testing:** You can now upload up to three thumbnails in YouTube Studio. The system automatically picks the winner based on which one generates the most **watch time**, not just the most clicks.
+
+### 3. Engagement Velocity (Likes, Comments, Shares)
+
+These are considered "Engagement Velocity" signals—basically, how much noise a video makes in its first 48 hours.
+
+* **Likes & Comments:** These act as "social proof." They tell the algorithm the content is sparking a reaction. **Replying to comments** within the first 24 hours is a massive signal that your channel is an active community, which increases your "Trust Score."
+* **Shares:** Sharing to private groups (WhatsApp, Discord) or other social platforms is a high-value signal because it brings "External Sessions" to YouTube, which the platform loves.
+
+### 4. Format Synergy: Shorts as a "Funnel"
+
+In 2026, visibility is often a "multi-format" game:
+
+* **The Shorts Hook:** Using vertical Shorts to "tease" your long-form content is the most effective way to reach new audiences.
+* **Binge-Watching (Session Time):** If your video leads a viewer to watch a *second* video (even someone else's), YouTube rewards you. Using **Playlists** and **End Screens** is essential for this.
+
+### Summary Table: What to Prioritize
+
+| Priority | Metric | Why it matters in 2026 |
+| --- | --- | --- |
+| **Highest** | **Retention / AVD** | Proves the content is actually good. |
+| **High** | **Satisfaction Surveys** | AI uses these to determine if you are "serving" the user. |
+| **Medium** | **CTR** | Gets people in the door (but must match the content). |
+| **Moderate** | **Likes / Shares** | Signals "velocity" and community health. |
+| **Low** | **Subscribers** | Follower count is now less important than individual video performance. |
+
+---
+
+**Would you like me to analyze your "10BitWorks" video description to see how we can optimize it for these specific 2026 keywords and "Search Everywhere Optimization"?**

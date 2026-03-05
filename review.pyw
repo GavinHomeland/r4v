@@ -48,30 +48,6 @@ CLR_HEADER = "#cc88ff"
 FONT_FAMILY = "Segoe UI"
 FONT_MONO = "Consolas"
 
-# (label, cli args, button colour, auto-reload review after completion, tooltip)
-PROC_BTNS = [
-    ("Discover",       ["cli.py", "discover"],               CLR_BTN_BG, False,
-     "Scan @roll4veterans for new videos and update data/videos.json"),
-    ("Fetch Descs",    ["cli.py", "descriptions"],           CLR_BTN_BG, True,
-     "Download the current description text from YouTube for every video\n(needed so the left pane shows what's live)"),
-    ("Transcripts",    ["cli.py", "transcripts"],            CLR_BTN_BG, False,
-     "Fetch auto-generated captions for any video that doesn't have them yet\n(may wait 2 hrs if YouTube rate-limits the IP)"),
-    ("Generate AI",    ["cli.py", "generate"],               "#89b4fa",  True,
-     "Run Gemini AI to generate title, description, tags, hashtags, and comment\nfor every video that has a transcript"),
-    ("Pipeline (new)", ["cli.py", "pipeline", "--new-only"], "#89b4fa",  True,
-     "Discover → transcripts → generate AI — skips videos already processed"),
-    ("Push Dry-Run",   ["cli.py", "push", "--dry-run"],      CLR_BTN_BG, False,
-     "Preview what would be sent to YouTube — no changes made\n(safe to run any time)"),
-    ("Push Live",      ["cli.py", "push"],                   CLR_SKIP,   False,
-     "Apply all Approved metadata to YouTube via the Data API\nRequires OAuth with etracyjob@gmail.com"),
-    ("Engage Dry-Run", ["cli.py", "engage", "--dry-run"],    CLR_BTN_BG, False,
-     "Preview which videos would be liked and commented on — no changes made"),
-    ("Engage",         ["cli.py", "engage"],                 CLR_SKIP,   False,
-     "Like all approved videos and post their channel comments as @roll4veterans\nSkips videos flagged 'JT Required'"),
-    ("Check Quota",    ["cli.py", "quota"],                  CLR_BTN_BG, False,
-     "Show today's YouTube Data API quota usage\n(daily limit: 10,000 units — resets midnight PT)"),
-]
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Display helpers
@@ -190,6 +166,46 @@ class Tooltip:
             font=(FONT_FAMILY, 9), relief="solid", borderwidth=1,
             padx=10, pady=5,
         ).pack()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WrapFrame — left-to-right layout that wraps children on resize
+# ─────────────────────────────────────────────────────────────────────────────
+
+class WrapFrame(tk.Frame):
+    """Frame that arranges child widgets left-to-right, wrapping to the next
+    row when the available width is exceeded.  Children are registered via
+    add(); the frame manages its own height via place()."""
+
+    def __init__(self, master, gap: int = 4, **kw):
+        super().__init__(master, **kw)
+        self.pack_propagate(False)   # height controlled by _reflow, not children
+        self._gap = gap
+        self._items: list[tuple[tk.Widget, int]] = []  # (widget, padx)
+        self.bind("<Configure>", lambda e: self.after_idle(self._reflow))
+
+    def add(self, widget: tk.Widget, padx: int = 3) -> tk.Widget:
+        """Register a child widget for wrapping layout and return it."""
+        self._items.append((widget, padx))
+        return widget
+
+    def _reflow(self):
+        W = self.winfo_width()
+        if W < 10:
+            return
+        x, y, row_h = self._gap, self._gap, 0
+        for widget, padx in self._items:
+            widget.update_idletasks()
+            rw = max(widget.winfo_reqwidth(), 1) + padx * 2
+            rh = max(widget.winfo_reqheight(), 4)
+            if x + rw > W and x > self._gap:
+                x = self._gap
+                y += row_h + self._gap
+                row_h = 0
+            widget.place(x=x + padx, y=y)
+            x += rw
+            row_h = max(row_h, rh)
+        self.configure(height=y + row_h + self._gap)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -399,6 +415,10 @@ class R4VReviewApp:
         self._filtered_ids: list[str] = []
         self._current_index: int = 0
 
+        # Process buttons registry (populated in _build_ui; used for disable-all-during-run)
+        self._proc_buttons: dict = {}
+
+        self.root.minsize(880, 600)
         self._build_ui()
         self._load_data()
         self.root.after(600, self._check_new_activity)
@@ -406,26 +426,19 @@ class R4VReviewApp:
     # ── UI construction ───────────────────────────────────────────────────────
 
     def _build_ui(self):
-        # ── Toolbar ───────────────────────────────────────────────────────────
-        toolbar = tk.Frame(self.root, bg=CLR_PANEL, pady=6)
+        # ── Row 1: nav toolbar ────────────────────────────────────────────────
+        toolbar = tk.Frame(self.root, bg=CLR_PANEL, pady=5)
         toolbar.pack(fill="x", side="top")
 
         tk.Label(
             toolbar, text="  R4V Metadata Review",
             bg=CLR_PANEL, fg=CLR_HEADER,
-            font=(FONT_FAMILY, 14, "bold"),
+            font=(FONT_FAMILY, 13, "bold"),
         ).pack(side="left", padx=10)
-
-        self._summary_var = tk.StringVar(value="Loading…")
-        tk.Label(
-            toolbar, textvariable=self._summary_var,
-            bg=CLR_PANEL, fg=CLR_MUTED,
-            font=(FONT_FAMILY, 10),
-        ).pack(side="left", padx=12)
 
         # Filter dropdown
         tk.Label(toolbar, text="Filter:", bg=CLR_PANEL, fg=CLR_MUTED,
-                 font=(FONT_FAMILY, 10)).pack(side="left", padx=(0, 4))
+                 font=(FONT_FAMILY, 10)).pack(side="left", padx=(12, 4))
 
         self._filter_var = tk.StringVar(value="Has Metadata")
         filter_menu = ttk.Combobox(
@@ -436,13 +449,17 @@ class R4VReviewApp:
         filter_menu.pack(side="left")
         self._filter_var.trace_add("write", lambda *_: self._load_data())
 
-        # ── Nav controls ──────────────────────────────────────────────────────
+        # Nav controls
         nav_frame = tk.Frame(toolbar, bg=CLR_PANEL)
         nav_frame.pack(side="left", padx=16)
 
-        btn_prev = self._make_btn(nav_frame, "◀", lambda: self._nav(-1), CLR_BTN_BG)
-        btn_prev.pack(side="left", padx=2)
-        Tooltip(btn_prev, "Previous video  (← arrow key)")
+        self._btn_prev = tk.Button(
+            nav_frame, text="◀", command=lambda: self._nav(-1),
+            bg=CLR_BTN_BG, fg=CLR_MUTED, state="disabled", cursor="arrow",
+            font=(FONT_FAMILY, 9, "bold"), relief="flat", padx=8, pady=3,
+        )
+        self._btn_prev.pack(side="left", padx=2)
+        Tooltip(self._btn_prev, "Previous video  (← arrow key)")
 
         self._nav_var = tk.StringVar(value="0 / 0")
         tk.Label(
@@ -451,9 +468,13 @@ class R4VReviewApp:
             font=(FONT_FAMILY, 10, "bold"), width=8, anchor="center",
         ).pack(side="left", padx=4)
 
-        btn_next = self._make_btn(nav_frame, "▶", lambda: self._nav(1), CLR_BTN_BG)
-        btn_next.pack(side="left", padx=2)
-        Tooltip(btn_next, "Next video  (→ arrow key)")
+        self._btn_next = tk.Button(
+            nav_frame, text="▶", command=lambda: self._nav(1),
+            bg=CLR_BTN_BG, fg=CLR_MUTED, state="disabled", cursor="arrow",
+            font=(FONT_FAMILY, 9, "bold"), relief="flat", padx=8, pady=3,
+        )
+        self._btn_next.pack(side="left", padx=2)
+        Tooltip(self._btn_next, "Next video  (→ arrow key)")
 
         # Title jump dropdown
         self._jump_var = tk.StringVar()
@@ -464,24 +485,134 @@ class R4VReviewApp:
         self._jump_combo.pack(side="left", padx=8)
         self._jump_combo.bind("<<ComboboxSelected>>", self._on_jump_select)
 
-        # Right-side buttons
-        btn_frame = tk.Frame(toolbar, bg=CLR_PANEL)
-        btn_frame.pack(side="right", padx=10)
+        # More ▼ pulldown menu (right side)
+        self._more_menu = tk.Menu(
+            self.root, tearoff=0,
+            bg=CLR_PANEL, fg=CLR_TEXT,
+            font=(FONT_FAMILY, 9),
+            activebackground=CLR_BTN_BG, activeforeground=CLR_TEXT,
+        )
+        self._more_menu.add_command(
+            label="Push Dry-Run",
+            command=lambda: self._run_cli("Push Dry-Run", ["cli.py", "push", "--dry-run"], None, False),
+        )
+        self._more_menu.add_command(
+            label="Engage Dry-Run",
+            command=lambda: self._run_cli("Engage Dry-Run", ["cli.py", "engage", "--dry-run"], None, False),
+        )
+        self._more_menu.add_separator()
+        self._more_menu.add_command(
+            label="Check Quota",
+            command=lambda: self._run_cli("Check Quota", ["cli.py", "quota"], None, False),
+        )
+        self._more_menu.add_separator()
+        self._more_menu.add_command(label="Reload data", command=self._load_data)
+        self._more_menu.add_command(label="↺ Reset process", command=self._reset_proc)
 
-        _tb = [
-            ("Push Approved → YouTube", self._push_approved,     "#89b4fa",  "Open cli.py push in a terminal to apply all Approved metadata to YouTube"),
-            ("🎭 Personality",           self._edit_personalities, CLR_BTN_BG, "Edit JT's voice profile and sample phrases\n(config/personalities.json) — changes take effect on next ⚡"),
-            ("↺ Reset",                 self._reset_proc,         CLR_BTN_BG, "Force-reset if a process button or ⚡ gets stuck and does nothing"),
-            ("Reload",                  self._load_data,          CLR_BTN_BG, "Reload data from disk — picks up any files changed outside this window"),
-            ("?  Help",                 self._show_help,          "#f9e2af",  "Show workflow help and keyboard shortcuts"),
-            ("Exit",                    self.root.destroy,        CLR_BTN_BG, "Close the review tool"),
-        ]
-        for _label, _cmd, _color, _tip in _tb:
-            _b = self._make_btn(btn_frame, _label, _cmd, _color)
-            _b.pack(side="left", padx=4)
-            Tooltip(_b, _tip)
+        more_btn = tk.Button(
+            toolbar, text="More ▼",
+            bg=CLR_BTN_BG, fg=CLR_TEXT,
+            font=(FONT_FAMILY, 9), relief="flat",
+            padx=10, pady=4, cursor="hand2",
+        )
+        more_btn.config(command=lambda b=more_btn: self._more_menu.tk_popup(
+            b.winfo_rootx(), b.winfo_rooty() + b.winfo_height()))
+        more_btn.pack(side="right", padx=(0, 10))
+        Tooltip(more_btn, "Push Dry-Run · Engage Dry-Run · Check Quota · Reload · Reset")
 
-        # ── Process bar (must pack before body so it anchors to bottom) ─────────
+        # ── Row 2: action bar (wraps on resize) ───────────────────────────────
+        self._action_bar = WrapFrame(self.root, gap=5, bg=CLR_PANEL)
+        self._action_bar.pack(fill="x", side="top", pady=(0, 2))
+
+        def _sep() -> tk.Frame:
+            return tk.Frame(self._action_bar, bg=CLR_BORDER, width=2, height=28)
+
+        def _abtn(text: str, cmd, color: str, tip: str, key: str = None) -> tk.Button:
+            fg = "#1e1e2e" if color in (CLR_APPROVE, CLR_SKIP, "#89b4fa") else CLR_TEXT
+            b = tk.Button(
+                self._action_bar, text=text, command=cmd,
+                bg=color, fg=fg,
+                font=(FONT_FAMILY, 9, "bold"), relief="flat",
+                padx=10, pady=5, cursor="hand2",
+            )
+            Tooltip(b, tip)
+            if key:
+                self._proc_buttons[key] = b
+            return b
+
+        # Group 1: pipeline ops
+        b_pipe = _abtn(
+            "Pipeline ▸", self._open_pipeline_window, "#89b4fa",
+            "Run discover → transcripts (cached) → generate AI for new videos only\n"
+            "Opens a live progress window — click Skip to load cached data instead",
+            "Pipeline ▸",
+        )
+        self._action_bar.add(b_pipe, padx=5)
+
+        b_desc = _abtn(
+            "Fetch Descs",
+            lambda: self._run_cli("Fetch Descs", ["cli.py", "descriptions"],
+                                  self._proc_buttons["Fetch Descs"], True),
+            CLR_BTN_BG,
+            "Download current descriptions from YouTube\n(fills the Current pane in each card)",
+            "Fetch Descs",
+        )
+        self._action_bar.add(b_desc, padx=2)
+
+        b_trans = _abtn(
+            "Transcripts",
+            lambda: self._run_cli("Transcripts", ["cli.py", "transcripts"],
+                                  self._proc_buttons["Transcripts"], False),
+            CLR_BTN_BG,
+            "Fetch auto-generated captions for any video without them yet\n"
+            "(may wait 2-4 h if YouTube rate-limits the IP — check back later)",
+            "Transcripts",
+        )
+        self._action_bar.add(b_trans, padx=2)
+
+        self._action_bar.add(_sep(), padx=8)
+
+        # Group 2: push / engage
+        b_push = _abtn(
+            "Push Approved → YouTube", self._push_approved, "#89b4fa",
+            "Apply all Approved metadata to YouTube via the Data API\n"
+            "Requires OAuth — opens cli.py push in a new terminal",
+            "Push Approved",
+        )
+        self._action_bar.add(b_push, padx=5)
+
+        b_engage = _abtn(
+            "Engage",
+            lambda: self._run_cli("Engage", ["cli.py", "engage"],
+                                  self._proc_buttons["Engage"], False),
+            CLR_SKIP,
+            "Like all Approved videos and post their channel comments as @roll4veterans\n"
+            "Skips videos flagged 'JT Required'",
+            "Engage",
+        )
+        self._action_bar.add(b_engage, padx=2)
+
+        self._action_bar.add(_sep(), padx=8)
+
+        # Group 3: personality
+        b_pers = _abtn(
+            "🎭 Personality", self._edit_personalities, CLR_BTN_BG,
+            "Edit JT's voice profile and sample phrases\n"
+            "(config/personalities.json) — changes take effect on next ⚡",
+        )
+        self._action_bar.add(b_pers, padx=5)
+
+        self._action_bar.add(_sep(), padx=8)
+
+        # Group 4: help / exit
+        b_help = _abtn("? Help", self._show_help, "#f9e2af",
+                        "Show workflow guide and keyboard shortcuts")
+        self._action_bar.add(b_help, padx=5)
+
+        b_exit = _abtn("Exit", self.root.destroy, CLR_BTN_BG, "Close the review tool")
+        self._action_bar.add(b_exit, padx=2)
+
+        # ── Process + status bars (pack before card so they anchor to bottom) ──
         self._build_bottom_bar()
 
         # ── Single-card area ──────────────────────────────────────────────────
@@ -675,6 +806,43 @@ class R4VReviewApp:
 
         win.protocol("WM_DELETE_WINDOW", _dismiss)
 
+    # ── Footer helper ─────────────────────────────────────────────────────────
+
+    def _apply_footer(self, prop_w: tk.Text, video_id: str):
+        """Apply the canonical footer to the description.
+
+        - Strips any existing footer boilerplate (JOIN THE CONVERSATION block).
+        - Preserves any extra 🔗 link lines that were already in the footer
+          (e.g. URLs extracted from the transcript at generation time).
+        - Pulls the current hashtags from the Hashtags field widget.
+        - Safe to call multiple times — idempotent.
+        """
+        from config.settings import FOOTER_TEMPLATE
+
+        FOOTER_MARKER = "\nJOIN THE CONVERSATION"
+
+        # Pull hashtags from the sibling Hashtags widget
+        ht_w = self._widgets.get(video_id, {}).get("hashtags")
+        hashtags = ht_w.get().strip() if ht_w else ""
+
+        # Get current description text
+        text = prop_w.get("1.0", "end-1c")
+
+        # Preserve any 🔗 extra-link lines already present in the footer
+        extra_links = ""
+        if FOOTER_MARKER in text:
+            existing_footer = text[text.index(FOOTER_MARKER):]
+            link_lines = [ln for ln in existing_footer.split("\n") if ln.startswith("🔗")]
+            if link_lines:
+                extra_links = "\n" + "\n".join(link_lines)
+            text = text[:text.index(FOOTER_MARKER)]
+
+        text = text.rstrip()
+
+        footer = FOOTER_TEMPLATE.format(extra_links=extra_links, hashtags=hashtags)
+        prop_w.delete("1.0", "end")
+        prop_w.insert("1.0", text + footer)
+
     # ── Single-card navigation ─────────────────────────────────────────────────
 
     def _show_card(self, idx: int):
@@ -692,11 +860,13 @@ class R4VReviewApp:
                 bg=CLR_BG, fg=CLR_MUTED, font=(FONT_FAMILY, 12),
             ).pack(expand=True)
             self._nav_var.set("0 / 0")
+            self._update_nav_buttons()
             return
 
         idx = max(0, min(idx, total - 1))
         self._current_index = idx
         self._nav_var.set(f"{idx + 1} / {total}")
+        self._update_nav_buttons()
         try:
             self._jump_combo.current(idx)
         except Exception:
@@ -713,6 +883,145 @@ class R4VReviewApp:
         if new_idx != self._current_index:
             self._current_index = new_idx
             self._show_card(self._current_index)
+
+    def _update_nav_buttons(self):
+        """Enable/disable ◀ ▶ and set state+cursor at list boundaries."""
+        total = len(self._filtered_ids)
+        at_start = (total == 0 or self._current_index <= 0)
+        at_end   = (total == 0 or self._current_index >= total - 1)
+        if at_start:
+            self._btn_prev.config(state="disabled", fg=CLR_MUTED, cursor="arrow")
+        else:
+            self._btn_prev.config(state="normal",   fg=CLR_TEXT,  cursor="hand2")
+        if at_end:
+            self._btn_next.config(state="disabled", fg=CLR_MUTED, cursor="arrow")
+        else:
+            self._btn_next.config(state="normal",   fg=CLR_TEXT,  cursor="hand2")
+
+    def _open_pipeline_window(self):
+        """Open a dedicated progress window and run cli.py pipeline --new-only."""
+        if self._proc_running:
+            messagebox.showwarning("Busy", "Another process is already running.\nUse ↺ Reset (More ▼) if it is stuck.")
+            return
+
+        # Mark busy and disable all registered proc buttons
+        self._proc_running = True
+        for b in (v for v in self._proc_buttons.values() if v is not None):
+            b.config(state="disabled")
+        self._proc_progbar.start(12)
+        self._proc_status_var.set("Pipeline: new videos only…")
+
+        # Build progress window
+        win = tk.Toplevel(self.root)
+        win.title("R4V — Pipeline (new videos only)")
+        win.configure(bg=CLR_BG)
+        win.geometry("620x440")
+        win.update_idletasks()
+        cx = (win.winfo_screenwidth() - 620) // 2
+        cy = (win.winfo_screenheight() - 440) // 2
+        win.geometry(f"620x440+{cx}+{cy}")
+        win.lift()
+
+        tk.Label(win, text="R4V Pipeline — New Videos Only",
+                 bg=CLR_BG, fg=CLR_HEADER,
+                 font=(FONT_FAMILY, 13, "bold")).pack(pady=(16, 2))
+        tk.Label(win, text="discover  ·  transcripts (cached)  ·  generate AI metadata",
+                 bg=CLR_BG, fg=CLR_MUTED, font=(FONT_FAMILY, 9)).pack()
+
+        log_frame = tk.Frame(win, bg=CLR_BG)
+        log_frame.pack(fill="both", expand=True, padx=12, pady=8)
+
+        log_txt = tk.Text(log_frame, bg="#111128", fg=CLR_TEXT,
+                          font=(FONT_MONO, 9), relief="flat", wrap="word",
+                          state="disabled", height=14)
+        sb = ttk.Scrollbar(log_frame, command=log_txt.yview)
+        log_txt.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        log_txt.pack(fill="both", expand=True)
+
+        status_var = tk.StringVar(value="Starting…")
+        tk.Label(win, textvariable=status_var,
+                 bg=CLR_BG, fg=CLR_MUTED, font=(FONT_MONO, 8),
+                 anchor="w", wraplength=580).pack(fill="x", padx=12)
+
+        close_btn = tk.Button(win, text="Close when done",
+                               bg=CLR_BTN_BG, fg=CLR_TEXT,
+                               font=(FONT_FAMILY, 9), relief="flat",
+                               padx=12, pady=4, cursor="hand2",
+                               state="disabled", command=win.destroy)
+        close_btn.pack(pady=(4, 14))
+
+        def _append(text: str):
+            log_txt.config(state="normal")
+            log_txt.insert("end", text + "\n")
+            log_txt.see("end")
+            log_txt.config(state="disabled")
+
+        _q: queue.Queue = queue.Queue()
+
+        def _worker():
+            python = self._find_python()
+            cmd = [python, "-u", str(PROJECT_ROOT / "cli.py"), "pipeline", "--new-only"]
+            try:
+                proc = subprocess.Popen(
+                    cmd, cwd=str(PROJECT_ROOT),
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace",
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+                for line in proc.stdout:
+                    line = line.rstrip()
+                    if line:
+                        _q.put(("line", line))
+                proc.wait()
+                _q.put(("done", proc.returncode))
+            except Exception as e:
+                _q.put(("error", str(e)))
+
+        def _finish(success: bool, msg: str):
+            self._proc_running = False
+            self._proc_progbar.stop()
+            for b in (v for v in self._proc_buttons.values() if v is not None):
+                b.config(state="normal")
+            self._proc_status_var.set(msg)
+            if success:
+                self._load_data()
+            try:
+                close_btn.config(state="normal", text="Close")
+                win.protocol("WM_DELETE_WINDOW", win.destroy)
+            except Exception:
+                pass
+
+        def _poll():
+            try:
+                while True:
+                    kind, val = _q.get_nowait()
+                    if kind == "line":
+                        _append(val)
+                        status_var.set(val[:100])
+                    elif kind == "done":
+                        rc = val
+                        msg = "✓ Pipeline complete" if rc == 0 else f"⚠ Pipeline exited {rc}"
+                        _append(f"\n{msg}")
+                        status_var.set(msg)
+                        _finish(rc == 0, msg)
+                        return
+                    elif kind == "error":
+                        msg = f"⚠ Error: {val}"
+                        _append(f"\n{msg}")
+                        status_var.set(msg[:100])
+                        _finish(False, msg[:120])
+                        return
+            except queue.Empty:
+                pass
+            try:
+                win.after(100, _poll)
+            except Exception:
+                pass  # window destroyed early
+
+        threading.Thread(target=_worker, daemon=True).start()
+        win.after(100, _poll)
+        win.protocol("WM_DELETE_WINDOW", lambda: None)  # blocked while running
 
     def _on_jump_select(self, event):
         self._autosave_current()
@@ -942,6 +1251,25 @@ class R4VReviewApp:
                     "(other field edits are preserved)\n"
                     "Disabled while card is Approved")
 
+            # 🔗 Footer button — only on DESCRIPTION field
+            _footer_btn = None
+            if label == "DESCRIPTION":
+                _footer_btn = tk.Button(
+                    prop_frame, text="\U0001f517",
+                    bg=CLR_PROPOSED, fg=CLR_LINK,
+                    font=(FONT_MONO, 8), relief="flat",
+                    cursor="hand2", padx=3, pady=0,
+                    state="disabled" if is_locked else "normal",
+                )
+                if is_locked:
+                    _footer_btn.config(fg=CLR_MUTED)
+                _footer_btn.pack(side="right", anchor="n")
+                Tooltip(_footer_btn,
+                        "Apply the canonical footer (links + hashtags)\n"
+                        "Preserves any extra 🔗 links already in the field.\n"
+                        "Pulls hashtags from the Hashtags field.\n"
+                        "Disabled while card is Approved")
+
             if kind == "multi":
                 prop_w = tk.Text(
                     prop_frame, height=4, wrap="word",
@@ -968,6 +1296,12 @@ class R4VReviewApp:
                 gen_field_btn.config(
                     command=lambda vid=video_id, fk=field_key, pw=prop_w, k=kind, b=gen_field_btn:
                             self._generate_field(vid, fk, pw, k, b)
+                )
+
+            # Wire 🔗 footer button
+            if _footer_btn is not None and not is_locked:
+                _footer_btn.config(
+                    command=lambda pw=prop_w, vid=video_id: self._apply_footer(pw, vid)
                 )
 
             # >> copy button between the boxes
@@ -1076,7 +1410,7 @@ class R4VReviewApp:
         pending  = total - approved - skipped
         jt_count = sum(1 for m in self._metadata.values() if m.get("needs_jt_comment"))
         jt_str   = f"  |  📌 JT: {jt_count}" if jt_count else ""
-        self._summary_var.set(
+        self._status_bar_var.set(
             f"Videos: {len(self._videos)}  |  With metadata: {total}  |  "
             f"Approved: {approved}  |  Skipped: {skipped}  |  Pending: {pending}{jt_str}"
         )
@@ -1215,7 +1549,7 @@ class R4VReviewApp:
             status_lbl.config(text="Calling Gemini… (5–15 seconds)")
             self._proc_running = True
             btn.config(state="disabled", text="…")
-            for b in self._proc_buttons.values():
+            for b in (v for v in self._proc_buttons.values() if v is not None):
                 b.config(state="disabled")
             self._proc_progbar.start(12)
             self._proc_status_var.set(f"Generating {field} for {video_id[:14]}…")
@@ -1318,7 +1652,7 @@ class R4VReviewApp:
         """Force-reset the process-running flag — use when ⚡ or a button does nothing."""
         self._proc_progbar.stop()
         self._proc_running = False
-        for b in self._proc_buttons.values():
+        for b in (v for v in self._proc_buttons.values() if v is not None):
             b.config(state="normal")
         if self._proc_current_btn:
             try:
@@ -1367,12 +1701,12 @@ class R4VReviewApp:
         win = tk.Toplevel(self.root)
         win.title("R4V Review — Help")
         win.configure(bg=CLR_BG)
-        win.resizable(False, False)
-        win.geometry("600x480")
+        win.resizable(True, True)
+        win.geometry("660x600")
         win.update_idletasks()
-        x = (win.winfo_screenwidth() - 600) // 2
-        y = (win.winfo_screenheight() - 480) // 2
-        win.geometry(f"600x480+{x}+{y}")
+        x = (win.winfo_screenwidth() - 660) // 2
+        y = (win.winfo_screenheight() - 600) // 2
+        win.geometry(f"660x600+{x}+{y}")
 
         tk.Label(win, text="How to use R4V Review", bg=CLR_BG, fg=CLR_HEADER,
                  font=(FONT_FAMILY, 14, "bold"), pady=12).pack()
@@ -1381,29 +1715,39 @@ class R4VReviewApp:
             "WORKFLOW\n"
             "1. Each card is one YouTube Short.\n"
             "2. Click  ▶ Watch  to open the video on YouTube.\n"
-            "3. Left column (dark) = Current data from your channel cache.\n"
-            "   Note: description is not cached — check YouTube Studio to compare.\n"
-            "4. Right column (green) = AI-proposed new metadata. Edit freely.\n"
-            "5. Click  ✓ Approve  to queue a video for pushing to YouTube.\n"
-            "6. Click  ✗ Skip  to leave it unchanged.\n"
-            "7. When ready, click  Push Approved → YouTube  (top right).\n"
+            "3. Left column (dark) = Current data cached from YouTube.\n"
+            "   Run  Fetch Descs  to populate descriptions in the left pane.\n"
+            "4. Right column (green) = AI-proposed metadata. Edit freely before approving.\n"
+            "5. Click  ✓ Approve  to queue a video. Auto-advances to the next card.\n"
+            "6. Click  ✗ Skip  to leave that video unchanged on YouTube.\n"
+            "7. When ready, click  Push Approved → YouTube  in the action bar.\n"
             "\n"
-            "PENDING METADATA\n"
-            "If a card says '(no generated metadata yet)', the AI hasn't processed\n"
-            "that video. Run  R4V: Generate metadata (AI)  from the task runner,\n"
-            "then click  Reload  here.\n"
+            "ACTION BAR (second row)\n"
+            "  Pipeline ▸      Discover + generate AI for new videos — live progress window.\n"
+            "  Fetch Descs     Download current descriptions from YouTube into left pane.\n"
+            "  Transcripts     Fetch auto-captions (may be IP-blocked; retry in 2-4 h).\n"
+            "  Push Approved   Send all Approved metadata to YouTube Data API.\n"
+            "  Engage          Like + comment on Approved videos as @roll4veterans.\n"
+            "  🎭 Personality  Edit JT's voice profile (personalities.json).\n"
             "\n"
-            "TRANSCRIPTS\n"
-            "If transcripts are missing (IP ban from YouTube), wait 2-4 hours\n"
-            "then run  R4V: Fetch transcripts.  37 of 92 videos are cached.\n"
+            "MORE ▼ MENU\n"
+            "  Push Dry-Run / Engage Dry-Run — preview changes with no API calls.\n"
+            "  Check Quota — show today's YouTube API quota usage (10k units/day).\n"
+            "  Reload data — re-read all JSON files from disk.\n"
+            "  ↺ Reset process — unstick a frozen process button or ⚡ button.\n"
+            "\n"
+            "FIELD BUTTONS\n"
+            "  ⚡  Regenerate just that field via Gemini AI (opens prompt editor).\n"
+            "  🔗  Apply the canonical footer links + hashtags to the description.\n"
+            "  »   Copy the current YouTube value into the Proposed field.\n"
+            "\n"
+            "KEYBOARD\n"
+            "  ← / →  Navigate between videos (when focus is not in a text field).\n"
             "\n"
             "PUSHING\n"
-            "Push requires YouTube OAuth. Re-run OAuth with etracyjob@gmail.com\n"
-            "(the account with channel edit rights) before pushing.\n"
-            "\n"
-            "DAILY USE\n"
-            "Use the launcher (launcher.pyw) or Ctrl+Shift+P → Tasks: Run Task\n"
-            "to run pipeline steps without typing commands."
+            "  Push requires YouTube OAuth with etracyjob@gmail.com.\n"
+            "  Run  python cli.py push  once manually to trigger the OAuth browser flow\n"
+            "  if token.json is missing — afterwards pushes are automatic."
         )
 
         txt = tk.Text(win, bg=CLR_PANEL, fg=CLR_TEXT, font=(FONT_FAMILY, 10),
@@ -1427,51 +1771,43 @@ class R4VReviewApp:
     def _build_bottom_bar(self):
         self._proc_q: queue.Queue = queue.Queue()
         self._proc_running = False
-        self._proc_buttons: dict[str, tk.Button] = {}
+        # _proc_buttons is already initialised in __init__; populated by _build_ui
         self._proc_current_btn = None
         self._proc_current_label = ""
         self._proc_auto_reload = False
 
-        bar = tk.Frame(self.root, bg=CLR_PANEL)
-        bar.pack(fill="x", side="bottom")
+        # ── Status bar — very bottom ──────────────────────────────────────────
+        status_bar = tk.Frame(self.root, bg=CLR_PANEL)
+        status_bar.pack(fill="x", side="bottom")
+        tk.Frame(status_bar, bg=CLR_BORDER, height=1).pack(fill="x")
+        self._status_bar_var = tk.StringVar(value="Loading…")
+        tk.Label(
+            status_bar, textvariable=self._status_bar_var,
+            bg=CLR_PANEL, fg=CLR_MUTED,
+            font=(FONT_FAMILY, 9), anchor="w", padx=12, pady=2,
+        ).pack(fill="x")
 
-        tk.Frame(bar, bg=CLR_BORDER, height=1).pack(fill="x")
+        # ── Process bar — above status bar ───────────────────────────────────
+        proc_bar = tk.Frame(self.root, bg=CLR_PANEL)
+        proc_bar.pack(fill="x", side="bottom")
+        tk.Frame(proc_bar, bg=CLR_BORDER, height=1).pack(fill="x")
 
-        btn_row = tk.Frame(bar, bg=CLR_PANEL, pady=5)
-        btn_row.pack(fill="x", padx=10)
+        proc_row = tk.Frame(proc_bar, bg=CLR_PANEL, pady=3)
+        proc_row.pack(fill="x", padx=10)
 
-        for label, args, color, auto_reload, tip in PROC_BTNS:
-            # Dark text on light buttons, light text on dark buttons
-            fg = "#1e1e2e" if color in (CLR_SKIP, "#89b4fa") else CLR_TEXT
-            btn = tk.Button(
-                btn_row, text=label,
-                bg=color, fg=fg,
-                font=(FONT_FAMILY, 10, "bold"), relief="flat",
-                padx=10, pady=5, cursor="hand2",
-            )
-            btn.pack(side="left", padx=3)
-            btn.config(command=lambda l=label, a=args, b=btn, r=auto_reload:
-                       self._run_cli(l, a, b, r))
-            self._proc_buttons[label] = btn
-            Tooltip(btn, tip)
-
-        status_row = tk.Frame(bar, bg=CLR_PANEL, pady=4)
-        status_row.pack(fill="x", padx=10)
-
-        self._proc_progbar = ttk.Progressbar(
-            status_row, mode="indeterminate", length=180)
+        self._proc_progbar = ttk.Progressbar(proc_row, mode="indeterminate", length=180)
         self._proc_progbar.pack(side="left", padx=(0, 10))
 
         self._proc_status_var = tk.StringVar(value="Ready")
         tk.Label(
-            status_row, textvariable=self._proc_status_var,
+            proc_row, textvariable=self._proc_status_var,
             bg=CLR_PANEL, fg=CLR_MUTED,
             font=(FONT_MONO, 8), anchor="w",
         ).pack(side="left", fill="x", expand=True)
 
         self.root.after(100, self._poll_proc_q)
 
-    def _run_cli(self, label: str, args: list, btn: tk.Button, auto_reload: bool = False):
+    def _run_cli(self, label: str, args: list, btn, auto_reload: bool = False):
         if self._proc_running:
             return
 
@@ -1480,9 +1816,10 @@ class R4VReviewApp:
         self._proc_current_btn = btn
         self._proc_current_label = label
 
-        for b in self._proc_buttons.values():
+        for b in (v for v in self._proc_buttons.values() if v is not None):
             b.config(state="disabled")
-        btn.config(text=f"{label}…")
+        if btn is not None:
+            btn.config(text=f"{label}…")
         self._proc_progbar.start(12)
         self._proc_status_var.set(f"Starting: {label}")
 
@@ -1521,7 +1858,7 @@ class R4VReviewApp:
                     _popup = _tup[6] if len(_tup) > 6 else None
                     self._proc_progbar.stop()
                     self._proc_running = False
-                    for b in self._proc_buttons.values():
+                    for b in (v for v in self._proc_buttons.values() if v is not None):
                         b.config(state="normal")
                     _btn.config(state="normal", text=_lbl)
                     if _popup:
@@ -1544,7 +1881,7 @@ class R4VReviewApp:
                 elif kind in ("done", "error"):
                     self._proc_progbar.stop()
                     self._proc_running = False
-                    for b in self._proc_buttons.values():
+                    for b in (v for v in self._proc_buttons.values() if v is not None):
                         b.config(state="normal")
                     if self._proc_current_btn:
                         self._proc_current_btn.config(text=self._proc_current_label)
