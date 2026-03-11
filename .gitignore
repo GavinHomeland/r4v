@@ -1,8 +1,12 @@
 .env
 config/token.json
+config/token_jt.json
+config/token_gavin.json
 config/client_secret.json
+config/cookies.txt
 __pycache__/
 *.pyc
 .venv/
 data/
 *.log
+.claude/

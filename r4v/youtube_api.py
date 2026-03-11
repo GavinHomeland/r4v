@@ -4,6 +4,8 @@ from googleapiclient.errors import HttpError
 from config.settings import (
     QUOTA_VIDEOS_LIST,
     QUOTA_VIDEOS_UPDATE,
+    QUOTA_PLAYLIST_INSERT,
+    PLAYLIST_ID,
     APPLIED_DIR,
 )
 from r4v import quota_tracker
@@ -48,10 +50,13 @@ def update_video_metadata(
     description: str,
     tags: list[str],
     category_id: str = "22",
+    make_public: bool = True,
     dry_run: bool = False,
 ) -> bool:
-    """Update video title, description, and tags (costs 50 quota units).
+    """Update video title, description, tags, and optionally set visibility to public.
 
+    Costs 50 quota units. make_public=True also sets privacyStatus→public in the
+    same API call at no extra quota cost.
     Returns True on success (or in dry_run mode), False on failure.
     """
     if dry_run:
@@ -59,9 +64,12 @@ def update_video_metadata(
         print(f"  Title: {title[:80]}")
         print(f"  Description: {description[:120]}...")
         print(f"  Tags: {tags[:5]}...")
+        if make_public:
+            print(f"  Visibility: → public")
         return True
 
     quota_tracker.check_quota(QUOTA_VIDEOS_UPDATE)
+    parts = ["snippet"]
     body = {
         "id": video_id,
         "snippet": {
@@ -71,18 +79,63 @@ def update_video_metadata(
             "categoryId": category_id,
         },
     }
+    if make_public:
+        parts.append("status")
+        body["status"] = {"privacyStatus": "public"}
     try:
-        service.videos().update(part="snippet", body=body).execute()
+        service.videos().update(part=",".join(parts), body=body).execute()
         quota_tracker.consume(QUOTA_VIDEOS_UPDATE, f"videos.update({video_id})")
-        print(f"[youtube_api] Updated {video_id}: {title[:60]}")
+        visibility = " + made public" if make_public else ""
+        print(f"[youtube_api] Updated {video_id}: {title[:60]}{visibility}")
         return True
     except HttpError as e:
         print(f"[youtube_api] Failed to update {video_id}: {e}")
         return False
 
 
+def add_to_playlist(
+    service,
+    video_id: str,
+    playlist_id: str = PLAYLIST_ID,
+    dry_run: bool = False,
+) -> bool:
+    """Add a video to a playlist (costs 50 quota units).
+
+    Silently skips if the video is already in the playlist.
+    Returns True on success/already-present (or in dry_run), False on failure.
+    """
+    if dry_run:
+        print(f"[youtube_api] DRY RUN — would add {video_id} to playlist {playlist_id}")
+        return True
+
+    quota_tracker.check_quota(QUOTA_PLAYLIST_INSERT)
+    body = {
+        "snippet": {
+            "playlistId": playlist_id,
+            "resourceId": {"kind": "youtube#video", "videoId": video_id},
+        }
+    }
+    try:
+        service.playlistItems().insert(part="snippet", body=body).execute()
+        quota_tracker.consume(QUOTA_PLAYLIST_INSERT, f"playlistItems.insert({video_id})")
+        print(f"[youtube_api] Added {video_id} to playlist")
+        return True
+    except HttpError as e:
+        # 409 = video already in playlist — not an error
+        if e.resp.status == 409:
+            print(f"[youtube_api] {video_id} already in playlist — skipped")
+            return True
+        print(f"[youtube_api] Failed to add {video_id} to playlist: {e}")
+        return False
+
+
 def batch_update(service, metadata_map: dict[str, dict], dry_run: bool = True) -> dict:
     """Apply metadata updates for all approved videos.
+
+    For each approved video:
+      1. Update title / description / tags (videos.update — 50 units)
+      2. Set visibility → public (bundled in same call, 0 extra units)
+      3. Add to Roll for Veterans playlist (playlistItems.insert — 50 units)
 
     metadata_map: {video_id: metadata_dict from content_gen}
     Returns summary dict.
@@ -105,8 +158,13 @@ def batch_update(service, metadata_map: dict[str, dict], dry_run: bool = True) -
             description=meta["description"],
             tags=meta.get("tags", []),
             category_id=cat_id,
+            make_public=True,
             dry_run=dry_run,
         )
+
+        if ok:
+            # Add to playlist regardless of dry_run (add_to_playlist handles that internally)
+            add_to_playlist(service, video_id, dry_run=dry_run)
 
         if ok and not dry_run:
             results["updated"].append(video_id)

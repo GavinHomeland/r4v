@@ -3,9 +3,10 @@
 > **Tip:** Run any command via `Ctrl+Shift+P` → "Tasks: Run Task" → pick an **R4V:** task.
 
 ## Current Status
-> Last updated: 2026-03-03
-> Pipeline last run: in progress — transcripts partially fetched (37/92)
-> Videos discovered: 92
+> Last updated: 2026-03-10
+> Pipeline: fully operational — discover (yt-dlp + API), transcripts (proxy rotation), AI generate (Gemini), push + publish + playlist, engage (like + comment)
+> New video workflow: set new uploads to **Unlisted** in Studio → pipeline auto-discovers and populates → Approve → Push publishes + adds to playlist
+> Draft/"Uploaded" videos must be added manually via **Add Video** button (paste Studio URL)
 
 ---
 
@@ -34,32 +35,31 @@ Run via `Ctrl+Shift+P` → **Tasks: Run Task** — all R4V tasks are listed ther
 - [x] Dependencies installed: `.venv\Scripts\activate && pip install -r requirements.txt`
 - [x] `.env` file filled in — `GEMINI_API_KEY` and `YOUTUBE_CHANNEL_ID`
 - [x] GitHub repo created: https://github.com/GavinHomeland/r4v
-- [ ] **[Needed for push/engage only]** Google Cloud project created (see README.md Step 3)
-- [ ] **[Needed for push/engage only]** YouTube Data API v3 enabled in Google Cloud Console
-- [ ] **[Needed for push/engage only]** OAuth credentials downloaded → `config/client_secret.json`
-- [ ] **[Needed for push/engage only]** First-run OAuth browser login → creates `config/token.json`
+- [x] Google Cloud project created
+- [x] YouTube Data API v3 enabled in Google Cloud Console
+- [x] OAuth credentials downloaded → `config/client_secret.json`
+- [x] First-run OAuth browser login done (re-auth as etracyjob@gmail.com if comments fail)
 
 ---
 
 ## TODO Items
 
-### Right Now (no extra setup needed)
-- [x] Wait for IP ban to lift (2-4 hrs), then run `R4V: Fetch transcripts` — 37/92 cached, 55 remaining
-- [x] Run `R4V: Generate metadata (AI)` — can run now on the 37 already fetched
-- [ ] Open `R4V: Open review GUI` — approve / edit AI output
-- [ ] Add donate to RWB in the JOIN THE CONVERSATION section (https://www.zeffy.com/en-US/team/roll-for-veterans)
+### Right Now
+- [ ] Add remaining "Uploaded" (draft) videos via **Add Video** button (paste Studio URL): March 9 2026, Leaving NC, Other warehouse 2, Dinky wipers, Nash — Musings already added
+- [ ] Run Pipeline in review.pyw to fetch transcripts + generate AI metadata for those videos
+- [ ] Approve the generated metadata cards → Push to YouTube (publishes + adds to playlist)
+- [ ] Run Engage on newly pushed videos (like + comment as @roll4veterans)
 
 ### Before You Can Push to YouTube
 - [x] Google Cloud Console OAuth setup done — `config/client_secret.json` saved
-- [x] First-run OAuth browser login done — `config/token.json` saved (hellochauncy account)
-- [x] **Re-do OAuth with etracyjob@gmail.com** — current token uses wrong account (no channel edit rights)
-- [x] Run `R4V: Push to YouTube` first batch of approved metadata
+- [x] OAuth with etracyjob@gmail.com (JT's account) — token.json saved, push works
+- [x] Sunset thoughts pushed successfully; push popup now confirms success/failure
 
 ### Medium Priority
 - [ ] Verify transcript quality for all videos (Shorts auto-captions can be rough)
 - [ ] Review and tweak AI-generated titles for brand consistency
 - [ ] Regenerate Gemini API key (exposed in chat session 2026-03-02)
-- [ ] Set up Windows Task Scheduler for daily new-video processing (see Scheduling section)
+- [x] Set up Windows Task Scheduler for daily new-video processing (see Scheduling section)
 
 ### Low Priority / Future
 - [ ] Add thumbnail automation (YouTube API supports thumbnail upload)
@@ -69,7 +69,7 @@ Run via `Ctrl+Shift+P` → **Tasks: Run Task** — all R4V tasks are listed ther
 
 ---
 
-## Video Processing Status
+## Video Processing Status <== is this section supposed to do something, Claude?>
 
 | Video ID | Title (short) | Transcript | Generated | Approved | Pushed | Engaged |
 |----------|---------------|-----------|-----------|----------|--------|---------|
@@ -77,7 +77,7 @@ Run via `Ctrl+Shift+P` → **Tasks: Run Task** — all R4V tasks are listed ther
 
 ---
 
-## Quota Usage Tracker
+## Quota Usage Tracker <== and this one? Seems like this is available in the review app.>
 
 | Date | Used | Remaining | Notes |
 |------|------|-----------|-------|
@@ -92,16 +92,44 @@ Check current usage: `R4V: Check quota` (via Ctrl+Shift+P → Tasks: Run Task)
 ## Daily Workflow (once set up)
 
 **Normal session — process new videos:**
-1. Open `review.pyw` (double-click or `R4V: Open review GUI`)
-2. Click **Pipeline ▸** in the action bar — processes new videos with a live log window
-3. Review/edit AI output in each card; click ✓ Approve or ✗ Skip
-4. Click **Push Approved → YouTube**
+1. Open `review.pyw` (double-click or `R4V: Open review GUI`) — startup pipeline runs automatically
+2. If new videos were found, click **Pipeline ▸** to fetch transcripts + generate AI metadata
+3. **Review each card** — edit if needed, then click ✓ Approve, ✗ Skip, or 🏷 Done in Studio
+4. Click **Push Approved → YouTube** — publishes + adds to R4V playlist
+5. Click **Engage** — like + comment on newly pushed videos
 
 **First-time / full refresh (no scheduled task):**
 1. `R4V: Fetch transcripts` (may need multiple runs if IP-blocked)
 2. `R4V: Generate metadata (AI)` or use **Pipeline ▸** button
 3. Open `review.pyw` → review → approve
 4. Click **Push Approved → YouTube**
+
+---
+
+## Adding New Videos to the System
+
+### Recommended workflow for new uploads
+1. Upload video to YouTube Studio
+2. **Set visibility to Unlisted** (not "Uploaded"/draft) before closing Studio
+3. Next pipeline run (or every-4h scheduled check) will auto-discover it, fetch transcript, generate AI metadata
+4. **⏸ Human review** — open review.pyw, inspect each card:
+   - ✓ **Approve** — ready to push
+   - ✗ **Skip** — not ready, revisit later
+   - 🏷 **Done in Studio** — you edited it manually; exclude from automation
+5. Click **Push Approved → YouTube** — publishes to Public + adds to R4V playlist
+6. Click **Engage** — posts like + comment as @roll4veterans
+
+### Why "Uploaded" (draft) videos don't auto-discover
+YouTube's API has no endpoint to list draft videos. The uploads playlist API only returns Published videos (public or unlisted). **Draft = invisible to all discovery methods.** Setting to Unlisted takes one click and makes everything automatic.
+
+### Adding a draft video manually (one-time workaround)
+If a video is already stuck as "Uploaded/draft":
+1. Open **review.pyw** → More ▼ → **Add Video** (or click the Add Video button in the action bar)
+2. Paste the Studio URL: `https://studio.youtube.com/video/VIDEO_ID/edit`
+3. Click **Add** — the app fetches metadata and adds it to the list
+4. Run **Pipeline ▸** to fetch transcript and generate AI metadata
+
+Or via CLI: `python cli.py add-video VIDEO_ID`
 
 ---
 
@@ -181,10 +209,13 @@ For everything else: Gavin reviews + edits the AI comment in the COMMENT field, 
 | `TranscriptsDisabled` error | Video has no auto-captions yet; wait 24h or add captions manually |
 | `QuotaExceededError` | Hit 9,500 unit ceiling; wait until midnight PT for reset |
 | `HttpError 403` | OAuth token expired or wrong scope; delete `config/token.json` and re-run |
-| YouTube IP block on transcripts | Wait 45 min, then re-run [▶ transcripts](command:workbench.action.terminal.sendSequence?%7B%22text%22%3A%22cd%20/w/r4v%20%26%26%20.venv/Scripts/python.exe%20cli.py%20transcripts%5Cn%22%7D) — rate limiting is built in |
+| YouTube IP block on transcripts | Proxies handle this automatically; if all 10 proxies fail, wait ~2h and retry |
 | `json.JSONDecodeError` from Gemini | Gemini returned non-JSON; run generate with `--force --video-id=<id>` to retry |
 | review.pyw won't open | Run `.venv\Scripts\python.exe W:\r4v\review.pyw` from a terminal to see errors |
 | Gemini 404 model error | Check `config/settings.py` — model must be `gemini-2.5-flash-lite` |
+| New video not discovered by pipeline | If it shows "Uploaded" (not "Unlisted") in Studio, use Add Video button to add by ID |
+| review.pyw already running warning | Only one instance allowed; check taskbar/system tray for the existing window |
+| Push succeeded but video still shows old metadata | YouTube may take a few minutes to reflect changes; check Studio directly |
  
  ## Notes:
  In 2026, YouTube’s algorithm has shifted away from simply counting "vanity metrics" (like likes and subscribes) toward a deeper focus on **viewer satisfaction** and **AI-driven intent matching**.
@@ -233,3 +264,29 @@ In 2026, visibility is often a "multi-format" game:
 ---
 
 **Would you like me to analyze your "10BitWorks" video description to see how we can optimize it for these specific 2026 keywords and "Search Everywhere Optimization"?**
+---
+
+## Q&A
+
+### Tags vs Hashtags — what's the difference?
+
+**They are completely different fields that serve different purposes.**
+
+**Tags** (the `TAGS` field in the review dashboard) are YouTube's internal keyword list. Viewers never see them. They affect how YouTube's search and recommendation algorithm understands what your video is about. YouTube uses tags as hints — "this video is about cycling, veterans, Team RWB, Florida." Good tags are a mix of broad terms (cycling, veterans) and specific content terms (Team RWB, Roll4Veterans, Key West). We generate 15–20 per video.
+
+**Hashtags** (the `HASHTAGS` field, displayed below TAGS in the dashboard) are `#words` embedded in the video description. YouTube extracts them and displays them as clickable blue links above the video title in the player. When a viewer clicks `#TeamRWB`, they go to a feed of all videos using that hashtag. They DO affect discoverability — especially on Shorts. We generate 12–16 per video following the rules in `config/personalities.json`.
+
+**In short:** Tags are invisible search signals. Hashtags are visible, clickable links above the video title.
+
+---
+
+### Video Processing Status table
+
+This table was designed for manual tracking. With 106+ videos it's not practical to maintain by hand. **Use the review.pyw dashboard instead** — it shows real-time counts in the status bar at the bottom (Videos, With metadata, Approved, Skipped, Pending). For a full list, use the Filter dropdown or Jump combo in the GUI.
+
+---
+
+### Quota Usage Tracker table
+
+Same situation — the table here is a manual placeholder. **Use `R4V: Check quota` from the VSCode task menu** (or More ▼ → Check Quota in review.pyw) to see live quota usage from `data/quota_log.json`.
+

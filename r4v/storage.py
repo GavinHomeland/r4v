@@ -29,7 +29,12 @@ def list_pending_updates() -> list[str]:
 
 
 def list_approved_updates() -> list[str]:
-    """Return video IDs whose generated metadata is marked approved=True."""
+    """Return video IDs whose generated metadata is marked approved=True.
+
+    approved=True  → needs pushing
+    approved='external' → already pushed or done in Studio; skip
+    The applied/ directory is no longer used for filtering — approved state is the source of truth.
+    """
     from config.settings import GENERATED_DIR
 
     approved = []
