@@ -30,7 +30,13 @@ def _load_jt_profile() -> str:
         f"ABOUT JT: {jt.get('background', '')}",
         "",
         f"DESCRIPTION OPENER (mandatory, first line of every description): {jt.get('signature_opener', 'Hello friend!')}",
-        f"SIGNATURE CLOSER: {jt.get('signature_closer', 'Roll for veterans.')}",
+        f"SIGNATURE CLOSER (pick one that fits the mood — vary it): "
+        + ", ".join(
+            f'"{v}"' for v in (
+                [jt.get("signature_closer", "Roll for veterans.")] +
+                jt.get("closer_variants", [])
+            )
+        ),
         "",
         f"COMMENT OPENER (for YouTube comments — brotherly, personal, NOT 'Hello friend!'):",
         f"  Default: {comment_opener}",
@@ -177,9 +183,9 @@ def build_prompt(
     """Build the user prompt string without calling the API. Used by the GUI prompt editor."""
     return USER_PROMPT_TMPL.format(
         existing_title=existing_title or "(none)",
-        existing_description=existing_description or "(none — not yet fetched)",
+        existing_description=existing_description or "(none — JT hasn't written one yet)",
         transcript_text=transcript_text,
-        jt_opener=jt_opener or "Man, I tell you what —",
+        jt_opener=jt_opener or _pick_jt_opener(),
     )
 
 

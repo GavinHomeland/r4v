@@ -1920,12 +1920,13 @@ class R4VReviewApp:
             return
 
         try:
-            from r4v.content_gen import build_prompt
+            from r4v.content_gen import build_prompt, _pick_jt_opener
             video = self._video_map.get(video_id, {})
             prompt = build_prompt(
                 transcript_text=t_data["text"],
                 existing_title=video.get("title", ""),
                 existing_description=video.get("description", ""),
+                jt_opener=_pick_jt_opener(),
             )
         except Exception as e:
             messagebox.showerror("Prompt build error", str(e))
