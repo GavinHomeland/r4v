@@ -230,6 +230,7 @@ def generate(force, video_id):
         if not t:
             click.echo(f"No transcript for {video_id}")
             return
+        saved = load_json(GENERATED_DIR / f"{video_id}_metadata.json") or {}
         meta = generate_metadata(
             video_id,
             t["text"],
@@ -237,6 +238,7 @@ def generate(force, video_id):
             existing_description=video.get("description", ""),
             transcript_urls=t.get("urls", []),
             force=force,
+            ai_notes=saved.get("ai_notes", ""),
         )
         click.echo(f"\nGenerated metadata for {video_id}:")
         click.echo(f"  Title:    {meta['title']}")

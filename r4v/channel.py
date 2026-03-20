@@ -158,7 +158,7 @@ def _parse_iso_duration(iso: str) -> int:
     return h * 3600 + mi * 60 + s
 
 
-_SHORTS_MAX_SECONDS = 60
+_SHORTS_MAX_SECONDS = 180  # YouTube Shorts can now be up to 3 minutes
 
 
 def discover_unlisted_via_api(service) -> list[dict]:
@@ -235,14 +235,18 @@ def discover_unlisted_via_api(service) -> list[dict]:
                 "_duration_sec": duration_sec,
             }
 
-    # Log video IDs that appeared in the playlist but had no metadata returned —
-    # these are typically private, still processing, or deleted.
+    # Video IDs that appeared in the playlist but had no metadata returned —
+    # these are private, still processing, or deleted. Mark them so transcripts are skipped.
     invisible = [vid for vid in all_video_ids if vid not in api_data]
     if invisible:
         print(f"[channel] API: {len(invisible)} playlist ID(s) returned no metadata "
               f"(private / still processing / deleted):")
         for vid in invisible:
             print(f"  https://studio.youtube.com/video/{vid}/edit")
+        # Update availability for any invisible IDs already in videos.json
+        for v in existing:
+            if v["id"] in invisible:
+                v["availability"] = "private"
 
     # 4. Merge: update availability on existing entries, add missing ones
     existing = load_json(VIDEOS_JSON) or []

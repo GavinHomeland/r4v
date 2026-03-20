@@ -11,7 +11,7 @@ from pathlib import Path
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 from youtube_transcript_api.proxies import GenericProxyConfig
 
-from config.settings import TRANSCRIPTS_DIR, PROXIES_FILE, TRANSCRIPT_LOG_JSONL, WHISPER_PYTHON, WHISPER_MODEL, COOKIES_FILE
+from config.settings import TRANSCRIPTS_DIR, PROXIES_FILE, TRANSCRIPT_LOG_JSONL, WHISPER_PYTHON, WHISPER_MODEL, COOKIES_FILE, VIDEOS_JSON
 from r4v.storage import load_json, save_json
 
 
@@ -463,6 +463,14 @@ def fetch_all_transcripts(video_ids: list[str], force: bool = False) -> dict[str
     else:
         print("[transcript] No proxies configured — fetching anonymously (may hit IP limits)")
 
+    # Build a set of video IDs marked private — skip these entirely
+    _videos_data = load_json(VIDEOS_JSON) or []
+    _private_ids = {v["id"] for v in _videos_data if v.get("availability") == "private"}
+    if _private_ids:
+        skipped = [v for v in video_ids if v in _private_ids]
+        if skipped:
+            print(f"[transcript] Skipping {len(skipped)} private video(s): {skipped}")
+
     results: dict[str, dict | None] = {}
     total = len(video_ids)
     consecutive_blocks = 0
@@ -471,6 +479,11 @@ def fetch_all_transcripts(video_ids: list[str], force: bool = False) -> dict[str
     _log("batch", "batch", "start", f"{total} videos, force={force}, proxies={len(proxies)}")
 
     for i, vid in enumerate(video_ids, 1):
+        if vid in _private_ids:
+            results[vid] = None
+            print(f"[transcript] {i}/{total} {vid} (private — skipped)")
+            continue
+
         cache_path = TRANSCRIPTS_DIR / f"{vid}.json"
         if not force and cache_path.exists():
             results[vid] = load_json(cache_path)

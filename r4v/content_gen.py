@@ -2,6 +2,7 @@
 import json
 import random
 import re
+import urllib.request
 from pathlib import Path
 from urllib.parse import quote_plus
 from google import genai
@@ -94,8 +95,6 @@ def _load_gavin_profile() -> str:
     except Exception:
         return ""
 
-    lead_ins = gavin.get("conversational_lead_ins", [])
-    hacks = gavin.get("life_hack_pool", [])
     priorities = gavin.get("editorial_priorities", [])
 
     opener = gavin.get("comment_opener", "Hi, Brother")
@@ -117,19 +116,6 @@ def _load_gavin_profile() -> str:
     ]
     for p in priorities:
         lines.append(f"  - {p}")
-    lines += [
-        "",
-        "LEAD-INS FOR LIFE HACKS (pick one randomly when adding a hack):",
-    ]
-    for li in lead_ins[:6]:
-        lines.append(f"  \"{li}\"")
-    lines += [
-        "",
-        "LIFE HACK POOL (sample — choose one that doesn't obviously relate to the video topic):",
-    ]
-    for h in hacks[:8]:
-        lines.append(f"  \"{h}\"")
-
     return "\n".join(lines)
 
 
@@ -145,20 +131,38 @@ def _get_client() -> genai.Client:
     return _client
 
 
+def _load_known_family() -> str:
+    """Load known family members so Gemini can address them by name."""
+    try:
+        data = json.loads(_PERSONALITIES_PATH.read_text(encoding="utf-8"))
+        family = data.get("known_family", {})
+    except Exception:
+        return ""
+    if not family:
+        return ""
+    lines = ["KNOWN FAMILY IN THE COMMENTS (address by name, not generically):"]
+    for handle, info in family.items():
+        lines.append(f"  @{handle} — {info.get('name', handle)}: {info.get('relationship', '')}")
+    return "\n".join(lines)
+
+
 def _build_system_prompt() -> str:
     jt_profile = _load_jt_profile()
     gavin_profile = _load_gavin_profile()
+    family_note = _load_known_family()
     return (
         "You are the content engine for the Roll4Veterans (@roll4veterans) YouTube channel.\n\n"
         "=== JT TRACY — channel owner, use for title/description/comment_jt ===\n"
         "{jt_profile}\n\n"
         "=== GAVIN HOMELAND — channel manager, use ONLY for comment_gavin ===\n"
         "{gavin_profile}\n\n"
+        "{family_note}\n\n"
         "Team RWB (teamrwb.org) connects veterans through physical and social activity. "
         "R4V social: @roll4veterans on FB/IG/TT/YT. Website: r4v.songseekers.org"
     ).format(
         jt_profile=jt_profile or "JT Tracy — veteran cyclist, R4V founder.",
         gavin_profile=gavin_profile or "Gavin — channel manager, warm and goofy.",
+        family_note=family_note,
     )
 
 
@@ -174,18 +178,141 @@ def _pick_jt_opener() -> str:
     return "Man, I tell you what —"
 
 
+def _pick_gavin_hack() -> str:
+    """Pre-select a random lead_in + hack pair 25% of the time; else return ''."""
+    if random.random() > 0.25:
+        return ""
+    try:
+        data = json.loads(_PERSONALITIES_PATH.read_text(encoding="utf-8"))
+        gavin = data.get("gavin", {})
+        lead_ins = gavin.get("conversational_lead_ins", [])
+        hacks = gavin.get("life_hack_pool", [])
+        if lead_ins and hacks:
+            return f"{random.choice(lead_ins)} {random.choice(hacks)}"
+    except Exception:
+        pass
+    return ""
+
+
+def _extract_transcript_opening(transcript_text: str) -> str:
+    """Return the first meaningful sentence from the transcript (JT's actual words).
+
+    Strips speaker-change markers (>>) and disfluencies, then takes up to the
+    first sentence-ending punctuation or ~120 chars — whichever comes first.
+    Returns empty string if the transcript is blank or too short to be useful.
+    """
+    import re as _re
+    text = (transcript_text or "").strip()
+    if not text:
+        return ""
+    # Remove speaker-change lines (lines that start with >>)
+    lines = [l for l in text.splitlines() if not l.strip().startswith(">>")]
+    text = " ".join(lines).strip()
+    # Collapse whitespace
+    text = _re.sub(r"\s+", " ", text)
+    # Find first sentence boundary
+    m = _re.search(r"[.!?]", text[:200])
+    sentence = text[:m.start() + 1] if m else text[:120]
+    # Strip trailing filler that makes bad openers ("So, " / "Uh, " at the very start)
+    sentence = _re.sub(r"^(So[,.]?\s+|Uh[,.]?\s+|Um[,.]?\s+|And\s+|Well[,.]?\s+)", "", sentence, flags=_re.I)
+    return sentence.strip()
+
+
+def _fetch_weather(location: str) -> str:
+    """Fetch a one-line weather summary from wttr.in. Returns '' on any failure."""
+    if not location:
+        return ""
+    try:
+        q = quote_plus(location)
+        url = f"https://wttr.in/{q}?format=3"
+        req = urllib.request.Request(url, headers={"User-Agent": "curl/7.0"})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            return resp.read().decode("utf-8", errors="ignore").strip()
+    except Exception:
+        return ""
+
+
+def _guess_jt_location(existing_title: str, existing_description: str, transcript_text: str) -> str:
+    """Extract a best-guess location for JT from available text."""
+    # Prefer title — usually has the location
+    for text in (existing_title, existing_description, transcript_text[:800]):
+        # "in [City, State]" pattern
+        m = re.search(
+            r'\bin\s+([A-Z][a-zA-Z]+(?:[\s-][A-Z][a-zA-Z]+)?'
+            r'(?:,\s*(?:FL|GA|AL|MS|LA|TX|NM|AZ|CA|NV))?)',
+            text,
+        )
+        if m:
+            return m.group(1).strip()
+    # Fall back to last capitalized sequence in title
+    caps = re.findall(r'[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*', existing_title)
+    return caps[-1] if caps else ""
+
+
+def _build_local_color_hint(
+    existing_title: str = "",
+    existing_description: str = "",
+    transcript_text: str = "",
+) -> str:
+    """Fetch weather for JT's location and Gavin's Kansas. Return an injection hint or ''."""
+    jt_loc = _guess_jt_location(existing_title, existing_description, transcript_text)
+    jt_weather = _fetch_weather(jt_loc) if jt_loc else ""
+    gavin_weather = _fetch_weather("Salina, Kansas")
+
+    lines = []
+    if jt_weather:
+        lines.append(f"  JT's location right now — {jt_weather}")
+    if gavin_weather:
+        lines.append(f"  Gavin's Kansas right now — {gavin_weather}")
+    if not lines:
+        return ""
+    hint = "\n".join(lines)
+    return (
+        "LOCAL COLOR HINTS (weave in naturally if it fits — do NOT force it):\n"
+        f"{hint}\n"
+        "  (e.g. Gavin might mention it's cold in Kansas, or JT might note the weather as he rides)\n\n"
+    )
+
+
+def _format_ai_notes(ai_notes: str) -> str:
+    text = (ai_notes or "").strip()
+    if not text:
+        return ""
+    lines = "\n".join(f">> {line.lstrip('> ').strip()}" for line in text.splitlines() if line.strip())
+    return f"CORRECTIONS / NOTES FROM EDITOR (follow these exactly):\n{lines}\n\n"
+
+
 def build_prompt(
     transcript_text: str,
     existing_title: str = "",
     existing_description: str = "",
     jt_opener: str = "",
+    ai_notes: str = "",
+    gavin_hack: str = "",
+    local_color: str = "",
 ) -> str:
     """Build the user prompt string without calling the API. Used by the GUI prompt editor."""
+    opening = _extract_transcript_opening(transcript_text)
+    opening_hint = (
+        f'TRANSCRIPT OPENING (use this or a light prose adaptation as your first sentence '
+        f'after "Hello friend!"): "{opening}"\n'
+    ) if opening else ""
+    if gavin_hack:
+        hack_hint = (
+            f'After his 1-2 sentences, append this closing line VERBATIM — '
+            f'copy it character for character, no labels, no headers, no changes: '
+            f'"{gavin_hack}"\n'
+        )
+    else:
+        hack_hint = "End after his 1-2 sentences. Do not add anything extra.\n"
     return USER_PROMPT_TMPL.format(
         existing_title=existing_title or "(none)",
         existing_description=existing_description or "(none — JT hasn't written one yet)",
         transcript_text=transcript_text,
-        jt_opener=jt_opener or _pick_jt_opener(),
+        ai_notes_block=_format_ai_notes(ai_notes),
+        transcript_opening_hint=opening_hint,
+        gavin_hack_hint=hack_hint,
+        local_color_hint=local_color,
     )
 
 
@@ -207,34 +334,44 @@ specific detail to weave in, a person or place to mention) — treat those as ex
 you MUST follow for this video. A description can contain both: prose sections to model and ">>"
 lines to execute.
 
-FULL TRANSCRIPT:
+{local_color_hint}{ai_notes_block}FULL TRANSCRIPT:
 {transcript_text}
 
 ---
 
-Now write the description. Guidelines:
+Now write the description. The ONLY fixed rules are:
 
-- MUST open with: Hello friend! [relevant emoji]  — this greeting is the ENTIRE first line.
-  Then a blank line (\\n\\n), then the rest of the description.
-  Format: "Hello friend! 🚴\\n\\nJT is riding through..."
-- Then write naturally, like JT talking to a friend. 3-4 paragraphs, no headers, no bullet lists.
-- Each paragraph should flow into the next. Mix the immediate moment (what happened in this video) \
-with a little of the bigger picture (the ride, the mission, the people).
-- Use specific names, places, numbers, quotes from the transcript. \
-If someone is named in the transcript, use their name. If a title is mentioned (pastor, sheriff, \
-store owner, veteran, etc.), include it. Real details make it real.
-- If a URL was mentioned in the transcript or is in the existing description, weave it in naturally.
-- Scatter 1-2 emojis through the body where they feel natural — not forced.
-- NO hashtags anywhere in the description body.
-- Don't sound like AI. No "In this captivating short..." or "Join JT as he..." — just tell it straight.
-- End with a blank line (\\n\\n) then one of JT's SIGNATURE CLOSER variants on its own line \
-(e.g. "Roll for veterans." or "Sunshine and happiness." — pick the one that fits the mood). \
-The closer must be separated from the last paragraph by \\n\\n, never inline with it.
+FIXED (non-negotiable):
+- First line: Hello friend! + one relevant emoji. That line alone. Then \\n\\n.
+- No headers, no bullet lists, no hashtags anywhere in the body.
+- Names and real details from the transcript — if someone is named, use it.
+- If a URL appears in the transcript or existing description, include it naturally.
+- 1-2 emojis in the body where they fit. Not forced.
+- End with \\n\\n then a SIGNATURE CLOSER on its own line — pick whichever fits the mood.
 
-comment_jt is WRITTEN BY JT from his @roll4veterans account. JT was there in the video. He is now commenting on his own video to connect with his audience/fans about what he experienced. MUST open with exactly "{jt_opener}" + a relevant emoji on the first line — do not substitute a different opener. Then blank line (\n\n), then 1-2 sentences inviting fans to engage with what JT saw or felt. He speaks from his own experience — he does NOT ask himself what something was like. Ask the audience a question, or invite them to share a related story. MUST NOT be empty.
-Format: "{jt_opener} 🌊\n\nDan's 37 years blew me away. Any of you have a story like that from your local Legion post?"
+{transcript_opening_hint}FEEL (not a formula — let the transcript dictate the shape):
+Write like JT talking to a friend who wasn't there. Structure comes from what actually \
+happened, not from a template. Some videos are one strong moment; write that. Some are \
+a string of encounters; follow the thread. Zoom out to the mission when it fits naturally; \
+stay close to the moment when it doesn't.
 
-comment_gavin is WRITTEN BY GAVIN from his @erictracy5584 account. Gavin is JT's actual brother, watching from his farm in Kansas and replying to comment_jt. Open with "Hi, Brother"/"Hi, Bro"/"Hey, Bro" + emoji on first line, blank line (\n\n), then 1-2 sentences reacting to JT's specific words. Warm, slightly goofy. Occasionally append a non-sequitur life hack. MUST NOT be empty.
+comment_jt is WRITTEN BY JT (@roll4veterans). JT was there — he's commenting on his own video.
+Pick the opener from this list that fits the specific moment or mood of THIS video:
+  "Man, I tell you what —"  → something that blew him away
+  "Dude..."                 → something surprising or unexpected
+  "Hey, friends —"          → warm, inviting, casual check-in
+  "Hey there —"             → direct and personal
+  "Hey, friend —"           → talking to one person in the comments
+  "Appreciate you being here —" → grateful, sincere moment
+  "Glad you're along for the ride —" → forward momentum, adventure feel
+  "Well, here's the thing —" → about to share something specific
+  "I'm not gonna lie —"     → honest admission, something caught him off guard
+The opener must fit what JT actually experienced. Do NOT always pick "Man, I tell you what —".
+Then + one relevant emoji on that same line. Blank line (\\n\\n). Then 1-2 sentences: \
+specific reaction to what happened, then a question for the audience or an invitation to share. \
+JT speaks from experience — he does NOT ask himself what something was like. MUST NOT be empty.
+
+comment_gavin is WRITTEN BY GAVIN from his @erictracy5584 account. Gavin is JT's actual brother, watching from his farm in Kansas and replying to comment_jt. Open with "Hi, Brother"/"Hi, Bro"/"Hey, Bro" + emoji on first line, blank line (\n\n), then 1-2 sentences reacting to JT's specific words. Warm, slightly goofy. {gavin_hack_hint}MUST NOT be empty.
 Format: "Hi, Brother 🌽\n\n[Gavin's reaction to what JT said in comment_jt]"
 
 For locations: list every specific named place from the transcript (towns, businesses, parks, landmarks). Any place named in the transcript or description MUST appear in this list — do not omit it. Be granular: "Pelican Cove, Destin, FL" beats "Destin, FL". Use JT's route (Key West → Gulf Coast west → Los Angeles → Flagstaff) to disambiguate. If no specific places are named, return [].
@@ -275,7 +412,7 @@ def _build_location_comment(locations: list[dict]) -> str:
         if not query:
             continue
         url = f"https://maps.google.com/?q={quote_plus(query)}"
-        lines.append(f"{url} \u2190 {label}")
+        lines.append(f"{label} \u2192 {url}")
     return "\n".join(lines)
 
 
@@ -287,6 +424,7 @@ def generate_metadata(
     transcript_urls: list[str] | None = None,
     force: bool = False,
     prompt_override: str | None = None,
+    ai_notes: str = "",
 ) -> dict:
     """Generate AI metadata for a video. Caches result in data/generated/{video_id}_metadata.json.
 
@@ -310,11 +448,19 @@ def generate_metadata(
             pass
 
     client = _get_client()
+    gavin_hack = _pick_gavin_hack()
+    local_color = _build_local_color_hint(
+        existing_title=existing_title,
+        existing_description=existing_description,
+        transcript_text=transcript_text,
+    )
     prompt = prompt_override if prompt_override is not None else build_prompt(
         transcript_text=transcript_text,
         existing_title=existing_title,
         existing_description=existing_description,
-        jt_opener=_pick_jt_opener(),
+        ai_notes=ai_notes,
+        gavin_hack=gavin_hack,
+        local_color=local_color,
     )
 
     print(f"[content_gen] Generating metadata for {video_id} ...")

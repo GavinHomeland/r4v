@@ -86,7 +86,8 @@
       "Don't list things with bullets or bold section headers in the body",
       "Don't invent details not in the transcript",
       "Don't start sentences with 'Well,'",
-      "Don't start sentences with 'I rolled...'"
+      "NEVER start any sentence with 'I rolled' — this phrase is absolutely banned",
+      "NEVER open the body paragraph with where JT was or what he was doing — find a better hook"
     ],
     "hashtag_guidance": {
       "always_include": ["#RollForVeterans", "#R4V", "#TeamRWB"],
@@ -104,6 +105,16 @@
         "Add #FireFighter or #FirstResponders if applicable",
         "Aim for 12-16 total hashtags"
       ]
+    }
+  },
+  "known_family": {
+    "janellerhea1789": {
+      "name": "Janelle",
+      "relationship": "Sister of JT and Gavin. When she comments, JT or Gavin may address her by name — 'Janelle' — or as 'Sis'. Keep it warm and personal, like talking to family."
+    },
+    "rstracy": {
+      "name": "R. Tracy",
+      "relationship": "Brother of JT and Gavin. Loves dad jokes. When he comments, feel free to fire one back at him — JT tells dad jokes anyway, and R. would appreciate it."
     }
   },
   "gavin": {
@@ -124,8 +135,7 @@
       "Flows naturally — no bullet lists or bold headers",
       "Starts with 'Hi, Brother' + relevant emoji as the ENTIRE first line (Gavin is talking to his brother JT)",
       "Ends with a genuine call to action or forward-looking line",
-      "Mentions farm life in Kansas (pigs, brassicas, guinea fowl) as if from a secure bunker",
-      "INSTRUCTION: Randomized Non-Sequiturs. Every 3rd or 4th comment, append a 'Real Life Hack'. Use one 'conversational_lead_in' joined with one 'life_hack' from the pools below. Do not explain the hack."
+      "Mentions farm life in Kansas (pigs, brassicas, guinea fowl) as if from a secure bunker"
     ],
     "conversational_lead_ins": [
       "I was just thinking...",

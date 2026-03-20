@@ -104,7 +104,11 @@ def load_all_data() -> tuple[list[dict], dict[str, dict]]:
     if GENERATED_DIR.exists():
         for p in sorted(GENERATED_DIR.glob("*_metadata.json")):
             vid = p.stem.replace("_metadata", "")
-            data = load_json(p)
+            try:
+                data = load_json(p)
+            except Exception:
+                print(f"[data] Skipping malformed metadata file: {p.name}")
+                continue
             if data:
                 metadata[vid] = data
     return videos, metadata
@@ -579,6 +583,10 @@ class R4VReviewApp:
             command=self._edit_personalities,
         )
         self._more_menu.add_command(
+            label="\U0001f4dd Notes for AI \u2014 corrections for this video",
+            command=self._edit_ai_notes_dialog,
+        )
+        self._more_menu.add_command(
             label="\U0001f4ac Conversation Refresh",
             command=self._conversation_refresh,
         )
@@ -859,7 +867,7 @@ class R4VReviewApp:
         win = tk.Toplevel(self.root)
         win.title("New Activity")
         win.configure(bg=CLR_BG)
-        win.resizable(False, False)
+        win.resizable(True, True)
         win.transient(self.root)
         win.grab_set()
 
@@ -933,7 +941,7 @@ class R4VReviewApp:
         win = tk.Toplevel(self.root)
         win.title("Conversation Refresh")
         win.configure(bg=CLR_BG)
-        win.resizable(False, False)
+        win.resizable(True, True)
         win.geometry("420x160")
         win.update_idletasks()
         win.geometry(f"420x160+{(win.winfo_screenwidth()-420)//2}+{(win.winfo_screenheight()-160)//2}")
@@ -1000,14 +1008,21 @@ class R4VReviewApp:
                     service_gavin = get_youtube_service_gavin()
                 except Exception:
                     pass
-            status_var.set(f"Generating follow-up comments ({len(candidates)} videos)...")
+            def _refresh_progress(cur, tot, text):
+                status_var.set(text)
+                self._proc_status_var.set(f"Refresh: {text}")
+                work_win.update()
+
+            status_var.set(f"Starting — {len(candidates)} video(s)...")
             work_win.update()
-            batch = prepare_refresh_batch(service_jt, candidates)
+            batch = prepare_refresh_batch(service_jt, candidates,
+                                          progress_callback=_refresh_progress)
         except Exception as e:
             error_msg = str(e)
         finally:
             prog.stop()
             work_win.destroy()
+            self._proc_status_var.set("")
 
         if error_msg:
             messagebox.showerror("Conversation Refresh", f"Error: {error_msg}")
@@ -1040,42 +1055,63 @@ class R4VReviewApp:
                  font=(FONT_FAMILY, 13, "bold")).pack(pady=(12, 0), padx=12, anchor="w")
 
         responder_var = tk.StringVar()
-        tk.Label(win, textvariable=responder_var, bg=CLR_BG, fg=CLR_MUTED,
-                 font=(FONT_FAMILY, 11)).pack(padx=12, anchor="w")
+        responder_lbl = tk.Label(win, textvariable=responder_var, bg=CLR_BG, fg=CLR_MUTED,
+                                 font=(FONT_FAMILY, 11))
+        responder_lbl.pack(padx=12, anchor="w")
 
-        # Existing comments panel
-        tk.Label(win, text="Recent comments:", bg=CLR_BG, fg=CLR_MUTED,
-                 font=(FONT_FAMILY, 11, "bold")).pack(pady=(8, 2), padx=12, anchor="w")
-        existing_txt = tk.Text(win, bg="#111128", fg="#aaa", height=6,
-                               font=(FONT_MONO, 11), relief="flat", wrap="word", state="disabled")
-        existing_txt.pack(fill="x", padx=12)
-
-        # Proposed comment editor
-        tk.Label(win, text="Generated follow-up (edit before approving):",
-                 bg=CLR_BG, fg=CLR_MUTED, font=(FONT_FAMILY, 11, "bold")).pack(pady=(8, 2), padx=12, anchor="w")
-        proposed_txt = tk.Text(win, bg="#0d1f30", fg=CLR_TEXT, height=5,
-                               font=(FONT_MONO, 11), relief="flat", wrap="word",
-                               insertbackground=CLR_TEXT)
-        proposed_txt.pack(fill="x", padx=12)
+        # Bottom section — pack before existing_txt so it anchors to the bottom
+        btn_frame = tk.Frame(win, bg=CLR_BG)
+        btn_frame.pack(side="bottom", pady=12)
 
         progress_var = tk.StringVar(value="")
         tk.Label(win, textvariable=progress_var, bg=CLR_BG, fg=CLR_MUTED,
-                 font=(FONT_FAMILY, 10)).pack(pady=(4, 0))
+                 font=(FONT_FAMILY, 10)).pack(side="bottom")
 
-        btn_frame = tk.Frame(win, bg=CLR_BG)
-        btn_frame.pack(pady=12)
+        proposed_txt = tk.Text(win, bg="#0d1f30", fg=CLR_TEXT, height=5,
+                               font=(FONT_MONO, 11), relief="flat", wrap="word",
+                               insertbackground=CLR_TEXT)
+        proposed_txt.pack(side="bottom", fill="x", padx=12)
+
+        tk.Label(win, text="Generated follow-up (edit before approving):",
+                 bg=CLR_BG, fg=CLR_MUTED, font=(FONT_FAMILY, 11, "bold")).pack(
+                     side="bottom", pady=(8, 2), padx=12, anchor="w")
+
+        # Existing comments — fills all remaining space
+        tk.Label(win, text="Recent comments:", bg=CLR_BG, fg=CLR_MUTED,
+                 font=(FONT_FAMILY, 11, "bold")).pack(pady=(8, 2), padx=12, anchor="w")
+        existing_txt = tk.Text(win, bg="#111128", fg="#aaa",
+                               font=(FONT_MONO, 11), relief="flat", wrap="word", state="disabled")
+        existing_txt.pack(fill="both", expand=True, padx=12)
+        existing_txt.tag_config("gavin",   foreground="#a6e3a1")
+        existing_txt.tag_config("jt",      foreground="#62ddff")
+        existing_txt.tag_config("janelle", foreground="#cba6f7")
+        existing_txt.tag_config("rstracy", foreground="#fab387")
+        existing_txt.tag_config("target",  foreground="#ffffff", background="#2a1f00")
 
         def _load_item(i: int):
             item = batch[i]
             win.title(f"Conversation Refresh — Review ({i+1}/{total})")
             hdr_var.set(f"{i+1}/{total}  \u2014  {item['title'][:60]}")
+            is_gavin = item["responder"] == "gavin"
             responder_var.set(
-                f"Responder: {'@roll4veterans (JT)' if item['responder'] == 'jt' else '@erictracy5584 (Gavin)'}"
+                f"Replying as: {'@erictracy5584 (Gavin)' if is_gavin else '@roll4veterans (JT)'}"
             )
+            responder_lbl.config(fg="#a6e3a1" if is_gavin else "#62ddff")
             existing_txt.config(state="normal")
             existing_txt.delete("1.0", "end")
+            target_tid = item.get("reply_to_thread_id")
             for c in reversed(item["existing_comments"]):
-                existing_txt.insert("end", f"{c['author']}:\n  {c['text']}\n\n")
+                author = c["author"]
+                is_target = c.get("thread_id") == target_tid
+                tag = ("target" if is_target
+                       else "gavin"   if "erictracy" in author.lower()
+                       else "jt"      if "roll4veterans" in author.lower()
+                       else "janelle" if "janellerhea" in author.lower()
+                       else "rstracy" if "rstracy" in author.lower()
+                       else None)
+                prefix = "↳ replying to → " if is_target else ""
+                line = f"{prefix}{author}:\n  {c['text']}\n\n"
+                existing_txt.insert("end", line, tag or "")
             existing_txt.config(state="disabled")
             proposed_txt.delete("1.0", "end")
             proposed_txt.insert("1.0", item["generated_comment"])
@@ -1130,7 +1166,9 @@ class R4VReviewApp:
                 ok = post_refresh_comment(
                     service_jt, service_gavin,
                     item["video_id"], item["final_comment"],
-                    item["responder"], dry_run=False,
+                    item["responder"],
+                    reply_to_thread_id=item.get("reply_to_thread_id", ""),
+                    dry_run=False,
                 )
                 if ok:
                     posted += 1
@@ -1376,6 +1414,11 @@ class R4VReviewApp:
         if not meta or not widgets:
             return
         for field, w in widgets.items():
+            if field == "_cur_description":
+                # Editable current description — save back to videos.json
+                video = self._video_map.get(video_id, {})
+                video["description"] = w.get("1.0", "end-1c")
+                continue
             if isinstance(w, tk.Text):
                 meta[field] = w.get("1.0", "end-1c")
             elif isinstance(w, tk.Entry):
@@ -1386,6 +1429,9 @@ class R4VReviewApp:
         if "comment" in meta:
             meta["comment_jt"] = meta["comment"]
         save_json(GENERATED_DIR / f"{video_id}_metadata.json", meta)
+        # If the editable current description changed, persist to videos.json too
+        if "_cur_description" in widgets:
+            save_json(VIDEOS_JSON, self._videos)
 
     # ── Video card ────────────────────────────────────────────────────────────
 
@@ -1518,9 +1564,14 @@ class R4VReviewApp:
             ("HASHTAGS",    existing_hashtags, proposed_hashtags,  "single", False, True, existing_hashtags),
         ]
 
+        vpane = tk.PanedWindow(card, orient=tk.VERTICAL, sashwidth=5,
+                               sashrelief="flat", bg=CLR_BORDER, bd=0)
+        vpane.pack(fill="both", expand=True)
+
         for label, current_val, proposed_val, kind, expands, copyable, copy_source in fields:
-            row = tk.Frame(card, bg=CLR_PANEL, pady=3)
-            row.pack(fill="both" if expands else "x", expand=expands)
+            row = tk.Frame(vpane, bg=CLR_PANEL, pady=3)
+            vpane.add(row, stretch="always" if expands else "never",
+                      minsize=120 if kind == "multi" else 32)
 
             tk.Label(
                 row, text=f"  {label}",
@@ -1528,12 +1579,15 @@ class R4VReviewApp:
                 font=(FONT_MONO, 11, "bold"), width=12, anchor="w",
             ).pack(side="left", anchor="n")
 
-            cols = tk.Frame(row, bg=CLR_PANEL)
+            cols = tk.PanedWindow(row, orient=tk.HORIZONTAL, sashwidth=5,
+                                  sashrelief="flat", bg=CLR_BORDER, bd=0)
             cols.pack(fill="both" if expands else "x", expand=expands)
+            left_pane = tk.Frame(cols, bg=CLR_PANEL)
+            cols.add(left_pane, stretch="always", minsize=100)
 
             # Current (read-only)
             cur_frame = tk.LabelFrame(
-                cols, text="Current", bg=CLR_CURRENT, fg=CLR_TEXT,
+                left_pane, text="Current", bg=CLR_CURRENT, fg=CLR_TEXT,
                 font=(FONT_FAMILY, 10), padx=4, pady=2,
             )
             cur_frame.pack(side="left", fill="both", expand=True)
@@ -1542,12 +1596,12 @@ class R4VReviewApp:
                 cur_w = tk.Text(
                     cur_frame, height=2, wrap="word",
                     bg=CLR_CURRENT, fg=CLR_TEXT,
-                    font=(FONT_MONO, 11), relief="flat", state="disabled",
+                    font=(FONT_MONO, 11), relief="flat",
                 )
                 cur_w.pack(fill="both", expand=True)
-                cur_w.config(state="normal")
                 cur_w.insert("1.0", current_val)
-                cur_w.config(state="disabled")
+                if label == "DESCRIPTION":
+                    widgets["_cur_description"] = cur_w
             else:
                 cur_w = tk.Entry(
                     cur_frame,
@@ -1562,7 +1616,7 @@ class R4VReviewApp:
 
             # Copy-arrow column (sits on the border between Current and Proposed)
             if copyable:
-                copy_col = tk.Frame(cols, bg=CLR_PANEL, width=34)
+                copy_col = tk.Frame(left_pane, bg=CLR_PANEL, width=34)
                 copy_col.pack(side="left", fill="y")
                 copy_col.pack_propagate(False)
 
@@ -1573,7 +1627,7 @@ class R4VReviewApp:
                 bg=CLR_PROPOSED, fg=CLR_APPROVE if not is_locked else CLR_MUTED,
                 font=(FONT_FAMILY, 10), padx=4, pady=2,
             )
-            prop_frame.pack(side="left", fill="both", expand=True)
+            cols.add(prop_frame, stretch="always", minsize=100)
 
             # ⚡ per-field AI gen button — packed first so it anchors top-right
             field_key = label.lower()
@@ -1682,13 +1736,14 @@ class R4VReviewApp:
             frame = tk.LabelFrame(row, text=lbl_txt, bg="#0d1f30", fg=fg_color,
                                   font=(FONT_FAMILY, 10), padx=4, pady=2)
             frame.pack(side="left", fill="x", expand=True)
-            w = tk.Entry(frame, bg="#0d1f30", fg=CLR_TEXT,
-                         font=(FONT_MONO, 11), relief="flat", insertbackground=CLR_TEXT)
+            w = tk.Text(frame, bg="#0d1f30", fg=CLR_TEXT,
+                        font=(FONT_MONO, 11), relief="flat", insertbackground=CLR_TEXT,
+                        height=4, wrap="word")
             w.pack(fill="x")
             value = meta.get(meta_key) or meta.get("comment", "") if meta_key in ("comment_jt", "comment") else meta.get(meta_key, "")
-            w.insert(0, value)
+            w.insert("1.0", value)
             if is_locked:
-                w.config(state="readonly", readonlybackground="#0d1f30")
+                w.config(state="disabled")
             widgets[field_key] = w
             return w
 
@@ -1920,13 +1975,21 @@ class R4VReviewApp:
             return
 
         try:
-            from r4v.content_gen import build_prompt, _pick_jt_opener
+            from r4v.content_gen import build_prompt, _pick_gavin_hack, _build_local_color_hint
             video = self._video_map.get(video_id, {})
+            meta = self._metadata.get(video_id, {})
+            t_text = t_data["text"]
             prompt = build_prompt(
-                transcript_text=t_data["text"],
+                transcript_text=t_text,
                 existing_title=video.get("title", ""),
                 existing_description=video.get("description", ""),
-                jt_opener=_pick_jt_opener(),
+                ai_notes=meta.get("ai_notes", ""),
+                gavin_hack=_pick_gavin_hack(),
+                local_color=_build_local_color_hint(
+                    existing_title=video.get("title", ""),
+                    existing_description=video.get("description", ""),
+                    transcript_text=t_text,
+                ),
             )
         except Exception as e:
             messagebox.showerror("Prompt build error", str(e))
@@ -2029,6 +2092,53 @@ class R4VReviewApp:
             threading.Thread(target=_worker, daemon=True).start()
 
         send_btn.config(command=_send)
+
+    def _edit_ai_notes_dialog(self):
+        """Popup to edit AI notes (>> instructions) for the current video."""
+        if not self._filtered_ids:
+            return
+        video_id = self._filtered_ids[self._current_idx]
+        meta = self._metadata.get(video_id)
+        if meta is None:
+            messagebox.showinfo("No metadata", "Generate metadata for this video first.")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title(f"Notes for AI — {video_id}")
+        win.configure(bg=CLR_BG)
+        win.resizable(True, True)
+        win.geometry("620x280")
+        win.transient(self.root)
+
+        tk.Label(win, text="Corrections / context for Gemini on next regen:",
+                 bg=CLR_BG, fg="#a08060", font=(FONT_FAMILY, 11)).pack(
+                     anchor="w", padx=12, pady=(10, 2))
+        tk.Label(win, text='Each line becomes a >> instruction.  Example: "The tour guide is a man, not a woman"',
+                 bg=CLR_BG, fg=CLR_MUTED, font=(FONT_FAMILY, 10, "italic")).pack(
+                     anchor="w", padx=12, pady=(0, 6))
+
+        txt = tk.Text(win, bg="#1a1408", fg=CLR_TEXT, font=(FONT_MONO, 11),
+                      relief="flat", insertbackground=CLR_TEXT, wrap="word")
+        txt.pack(fill="both", expand=True, padx=12, pady=(0, 6))
+        txt.insert("1.0", meta.get("ai_notes", ""))
+        txt.focus_set()
+
+        def _save(close=True):
+            notes = txt.get("1.0", "end-1c").strip()
+            meta["ai_notes"] = notes
+            save_json(GENERATED_DIR / f"{video_id}_metadata.json", meta)
+            if close:
+                win.destroy()
+
+        btn_frame = tk.Frame(win, bg=CLR_BG)
+        btn_frame.pack(pady=(0, 10))
+        tk.Button(btn_frame, text="Save & Close", command=lambda: _save(True),
+                  bg=CLR_APPROVE, fg="#000000", font=(FONT_FAMILY, 11, "bold"),
+                  padx=10).pack(side="left", padx=6)
+        tk.Button(btn_frame, text="Cancel", command=win.destroy,
+                  bg=CLR_BTN_BG, fg=CLR_TEXT, font=(FONT_FAMILY, 11),
+                  padx=10).pack(side="left", padx=6)
+        win.bind("<Escape>", lambda _: win.destroy())
 
     def _edit_personalities(self):
         """Open config/personalities.json in an editable popup."""
@@ -2210,7 +2320,7 @@ class R4VReviewApp:
         win = tk.Toplevel(self.root)
         win.title("Add Video by URL")
         win.configure(bg=CLR_BG)
-        win.resizable(False, False)
+        win.resizable(True, True)
         win.geometry("540x200")
         win.update_idletasks()
         x = (win.winfo_screenwidth() - 540) // 2
@@ -2228,9 +2338,10 @@ class R4VReviewApp:
         entry.focus_set()
 
         status_var = tk.StringVar()
-        status_lbl = tk.Label(win, textvariable=status_var, bg=CLR_BG, fg=CLR_SKIP,
-                              font=("Segoe UI", 11))
-        status_lbl.pack(pady=(4, 0), padx=16, anchor="w")
+        status_lbl = tk.Entry(win, textvariable=status_var, bg=CLR_BG, fg=CLR_SKIP,
+                              font=("Segoe UI", 11), relief="flat", state="readonly",
+                              readonlybackground=CLR_BG, bd=0)
+        status_lbl.pack(pady=(4, 0), padx=16, fill="x")
 
         def _extract_id(text: str) -> str | None:
             text = text.strip()
@@ -2291,7 +2402,7 @@ class R4VReviewApp:
                     action = "Added"
                 save_json(VIDEOS_JSON, videos)
                 self._load_data(skip_autosave=True)
-                self._set_status(f"{action}: '{video['title']}' ({privacy})")
+                self._proc_status_var.set(f"{action}: '{video['title']}' ({privacy})")
                 status_var.set(f"\u2713 {action}: {video['title']}")
                 status_lbl.config(fg=CLR_APPROVE)
                 entry_var.set("")

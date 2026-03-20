@@ -13,6 +13,7 @@ Account logic for generated follow-up:
 import json
 import random
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -83,6 +84,7 @@ def fetch_video_comments(service, video_id: str, max_results: int = 10) -> list[
                 "author":    snip.get("authorDisplayName", ""),
                 "text":      snip.get("textDisplay", ""),
                 "published": snip.get("publishedAt", ""),
+                "thread_id": item["id"],  # top-level comment ID — used as parentId for replies
             })
         return comments
     except HttpError as e:
@@ -172,15 +174,21 @@ def generate_refresh_comment(
         return ""
 
 
+_GEMINI_POLITE_DELAY = 2  # seconds between Gemini calls (free tier ~15 RPM)
+
+
 def prepare_refresh_batch(
     service_jt,
     video_ids: list[str],
+    progress_callback=None,
 ) -> list[dict]:
     """Fetch comments and generate follow-ups for a batch of videos.
 
     Returns list of dicts ready for the review UI:
     [{video_id, title, existing_comments, responder, generated_comment}]
     Skips videos where comments are disabled or generation fails.
+
+    progress_callback(current, total, status_text) — called after each video.
     """
     results = []
     total = len(video_ids)
@@ -189,14 +197,22 @@ def prepare_refresh_batch(
         title = meta.get("title", vid)
         print(f"  [refresh] {i}/{total} {vid} — {title[:50]}")
 
+        if progress_callback:
+            progress_callback(i, total, f"({i}/{total}) Fetching comments — {title[:40]}")
+
         comments = fetch_video_comments(service_jt, vid)
         if not comments:
             print(f"    Skipped — no comments")
+            if progress_callback:
+                progress_callback(i, total, f"({i}/{total}) No comments — skipped")
             continue
 
         last = _last_account(comments)
         responder = "gavin" if last == "jt" else "jt"
         print(f"    Last commenter: {last} → {responder} will respond")
+
+        if progress_callback:
+            progress_callback(i, total, f"({i}/{total}) Generating reply ({responder.upper()}) — {title[:30]}")
 
         generated = generate_refresh_comment(vid, comments, responder)
         if not generated:
@@ -204,12 +220,17 @@ def prepare_refresh_batch(
             continue
 
         results.append({
-            "video_id":          vid,
-            "title":             title,
-            "existing_comments": comments[:3],
-            "responder":         responder,
-            "generated_comment": generated,
+            "video_id":           vid,
+            "title":              title,
+            "existing_comments":  comments[:3],
+            "responder":          responder,
+            "generated_comment":  generated,
+            "reply_to_thread_id": comments[0].get("thread_id"),  # reply to most recent comment
+            "reply_to_author":    comments[0].get("author", ""),
         })
+
+        if i < total:
+            time.sleep(_GEMINI_POLITE_DELAY)
 
     return results
 
@@ -220,14 +241,22 @@ def post_refresh_comment(
     video_id: str,
     comment_text: str,
     responder: str,
+    reply_to_thread_id: str = "",
     dry_run: bool = False,
 ) -> bool:
-    """Post the approved refresh comment as the correct account."""
-    from r4v.engagement import _post_top_level
+    """Post the approved refresh comment as the correct account.
+
+    If reply_to_thread_id is set, posts as a reply to that comment thread
+    (so the original commenter gets a notification ping). Otherwise falls
+    back to a new top-level comment.
+    """
+    from r4v.engagement import _post_top_level, _post_reply
     service = service_jt if responder == "jt" else service_gavin
     if service is None:
         print(f"  [refresh] No service for responder={responder}, skipping {video_id}")
         return False
     label = HANDLE_JT if responder == "jt" else HANDLE_GAVIN
+    if reply_to_thread_id:
+        return _post_reply(service, reply_to_thread_id, comment_text, label, dry_run)
     tid = _post_top_level(service, video_id, comment_text, label, dry_run)
     return tid is not None
