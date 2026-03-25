@@ -111,11 +111,13 @@ def generate_refresh_comment(
     video_id: str,
     existing_comments: list[dict],
     responder: str,
+    fresh_start: bool = False,
 ) -> str:
     """Use Gemini to generate a natural conversation follow-up comment.
 
     responder: "jt" or "gavin"
     existing_comments: last 3 comments, newest first
+    fresh_start: True when there are no existing comments — JT is opening the thread cold
     Returns the generated comment text, or "" on failure.
     """
     if not GEMINI_API_KEY:
@@ -136,27 +138,46 @@ def generate_refresh_comment(
     context = "\n".join(context_lines)
 
     if responder == "jt":
-        voice_instruction = (
-            "Write in JT Tracy's voice (@roll4veterans). "
-            "Use one of his comment opener variants. "
-            "Keep it short (1-3 sentences), warm, personal. "
-            "Reference what was actually said in the conversation above."
-        )
+        if fresh_start:
+            voice_instruction = (
+                "Write a fresh comment from JT Tracy (@roll4veterans) — he's checking back in on "
+                "this video. No greeting, no opener — just launch straight into a reaction or thought. "
+                "Keep it short (1-3 sentences), warm, personal. Reference the video title. "
+                "NEVER reply to a comment by the same account (@roll4veterans)."
+            )
+        else:
+            voice_instruction = (
+                "Write in JT Tracy's voice (@roll4veterans). "
+                "No greeting, no opener — just dive right in. "
+                "Keep it short (1-3 sentences), warm, personal. "
+                "If anyone asked a question in the conversation above, answer it. "
+                "Reference what was actually said in the conversation above. "
+                "NEVER reply to a comment by the same account (@roll4veterans)."
+            )
     else:
         voice_instruction = (
             "Write in Gavin's voice (@erictracy5584). Gavin is JT's actual brother. "
-            "Start with 'Hi, Brother' or 'Hi, Bro' or a natural variant + emoji (vary it). "
+            "No greeting, no opener — just dive straight into a reply. "
             "Keep it short (1-2 sentences), warm, slightly goofy. "
+            "If anyone asked a question in the conversation above, answer it. "
             "Reference what was actually said in the conversation above. "
-            "Optionally append a non-sequitur life hack."
+            "Optionally append a non-sequitur life hack. "
+            "NEVER reply to a comment by the same account (@erictracy5584)."
         )
 
-    prompt = (
-        f"Video: \"{title}\"\n\n"
-        f"Recent comment thread (chronological):\n{context}\n\n"
-        f"Write the NEXT comment in this thread. {voice_instruction}\n\n"
-        "Respond with ONLY the comment text — no quotes, no labels, no explanation."
-    )
+    if fresh_start and not context:
+        prompt = (
+            f"Video: \"{title}\"\n\n"
+            f"No comments yet on this video. {voice_instruction}\n\n"
+            "Respond with ONLY the comment text — no quotes, no labels, no explanation."
+        )
+    else:
+        prompt = (
+            f"Video: \"{title}\"\n\n"
+            f"Recent comment thread (chronological):\n{context}\n\n"
+            f"Write the NEXT comment in this thread. {voice_instruction}\n\n"
+            "Respond with ONLY the comment text — no quotes, no labels, no explanation."
+        )
 
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
@@ -202,9 +223,48 @@ def prepare_refresh_batch(
 
         comments = fetch_video_comments(service_jt, vid)
         if not comments:
-            print(f"    Skipped — no comments")
+            # No comments yet — generate JT opener, then Gavin reply (two passes)
+            print(f"    No comments — generating JT opener + Gavin reply pair")
             if progress_callback:
-                progress_callback(i, total, f"({i}/{total}) No comments — skipped")
+                progress_callback(i, total, f"({i}/{total}) No comments — generating JT opener — {title[:30]}")
+
+            jt_text = generate_refresh_comment(vid, [], "jt", fresh_start=True)
+            if not jt_text:
+                print(f"    Skipped — JT generation failed")
+                if i < total:
+                    time.sleep(_GEMINI_POLITE_DELAY)
+                continue
+
+            time.sleep(_GEMINI_POLITE_DELAY)
+            if progress_callback:
+                progress_callback(i, total, f"({i}/{total}) Generating Gavin reply — {title[:30]}")
+
+            fake_jt = {"author": HANDLE_JT, "text": jt_text, "published": "", "thread_id": ""}
+            gavin_text = generate_refresh_comment(vid, [fake_jt], "gavin")
+
+            results.append({
+                "video_id":            vid,
+                "title":               title,
+                "existing_comments":   [],
+                "responder":           "jt",
+                "generated_comment":   jt_text,
+                "reply_to_thread_id":  "",
+                "reply_to_author":     "",
+                "pair_with_next":      bool(gavin_text),
+            })
+            if gavin_text:
+                results.append({
+                    "video_id":            vid,
+                    "title":               title,
+                    "existing_comments":   [fake_jt],
+                    "responder":           "gavin",
+                    "generated_comment":   gavin_text,
+                    "reply_to_thread_id":  "",
+                    "reply_to_author":     HANDLE_JT,
+                    "reply_to_jt_pending": True,
+                })
+            if i < total:
+                time.sleep(_GEMINI_POLITE_DELAY)
             continue
 
         last = _last_account(comments)
@@ -243,20 +303,20 @@ def post_refresh_comment(
     responder: str,
     reply_to_thread_id: str = "",
     dry_run: bool = False,
-) -> bool:
+) -> str | None:
     """Post the approved refresh comment as the correct account.
 
-    If reply_to_thread_id is set, posts as a reply to that comment thread
-    (so the original commenter gets a notification ping). Otherwise falls
-    back to a new top-level comment.
+    Returns the thread_id on success (new top-level) or the reply_to_thread_id
+    on success (reply), so callers can chain a paired Gavin reply.
+    Returns None on failure.
     """
     from r4v.engagement import _post_top_level, _post_reply
     service = service_jt if responder == "jt" else service_gavin
     if service is None:
         print(f"  [refresh] No service for responder={responder}, skipping {video_id}")
-        return False
+        return None
     label = HANDLE_JT if responder == "jt" else HANDLE_GAVIN
     if reply_to_thread_id:
-        return _post_reply(service, reply_to_thread_id, comment_text, label, dry_run)
-    tid = _post_top_level(service, video_id, comment_text, label, dry_run)
-    return tid is not None
+        ok = _post_reply(service, reply_to_thread_id, comment_text, label, dry_run)
+        return reply_to_thread_id if ok else None
+    return _post_top_level(service, video_id, comment_text, label, dry_run)

@@ -7,4 +7,3 @@
 64.137.96.74:6641:kunszvri:f4my5q4r8hbn
 216.10.27.159:6837:kunszvri:f4my5q4r8hbn
 142.111.67.146:5611:kunszvri:f4my5q4r8hbn
-194.39.32.164:6461:kunszvri:f4my5q4r8hbn

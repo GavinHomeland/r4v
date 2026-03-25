@@ -51,20 +51,29 @@ def update_video_metadata(
     tags: list[str],
     category_id: str = "22",
     make_public: bool = True,
+    publish_at: str = "",
     dry_run: bool = False,
 ) -> bool:
-    """Update video title, description, tags, and optionally set visibility to public.
+    """Update video title, description, tags, and optionally set visibility.
 
-    Costs 50 quota units. make_public=True also sets privacyStatus→public in the
-    same API call at no extra quota cost.
-    Returns True on success (or in dry_run mode), False on failure.
+    publish_at: RFC 3339 UTC timestamp (e.g. "2026-03-20T21:00:00Z"). When set,
+    the video stays private with a scheduled release — make_public is ignored.
+    Costs 50 quota units. Returns True on success (or in dry_run mode).
     """
+    # Strip [[ editor instruction lines before pushing to YouTube
+    description = "\n".join(
+        line for line in description.splitlines()
+        if not line.strip().startswith("[[")
+    ).strip()
+
     if dry_run:
         print(f"[youtube_api] DRY RUN — would update {video_id}:")
         print(f"  Title: {title[:80]}")
         print(f"  Description: {description[:120]}...")
         print(f"  Tags: {tags[:5]}...")
-        if make_public:
+        if publish_at:
+            print(f"  Visibility: → scheduled {publish_at}")
+        elif make_public:
             print(f"  Visibility: → public")
         return True
 
@@ -79,14 +88,20 @@ def update_video_metadata(
             "categoryId": category_id,
         },
     }
-    if make_public:
+    if publish_at:
+        parts.append("status")
+        body["status"] = {"privacyStatus": "private", "publishAt": publish_at}
+    elif make_public:
         parts.append("status")
         body["status"] = {"privacyStatus": "public"}
     try:
         service.videos().update(part=",".join(parts), body=body).execute()
         quota_tracker.consume(QUOTA_VIDEOS_UPDATE, f"videos.update({video_id})")
-        visibility = " + made public" if make_public else ""
-        print(f"[youtube_api] Updated {video_id}: {title[:60]}{visibility}")
+        if publish_at:
+            print(f"[youtube_api] Scheduled {video_id}: {title[:60]} → {publish_at}")
+        else:
+            visibility = " + made public" if make_public else ""
+            print(f"[youtube_api] Updated {video_id}: {title[:60]}{visibility}")
         return True
     except HttpError as e:
         print(f"[youtube_api] Failed to update {video_id}: {e}")
@@ -159,6 +174,7 @@ def batch_update(service, metadata_map: dict[str, dict], dry_run: bool = True) -
             tags=meta.get("tags", []),
             category_id=cat_id,
             make_public=True,
+            publish_at=meta.get("publish_at", ""),
             dry_run=dry_run,
         )
 

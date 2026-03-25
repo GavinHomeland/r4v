@@ -158,7 +158,7 @@ def _parse_iso_duration(iso: str) -> int:
     return h * 3600 + mi * 60 + s
 
 
-_SHORTS_MAX_SECONDS = 180  # YouTube Shorts can now be up to 3 minutes
+_SHORTS_MAX_SECONDS = 200  # YouTube Shorts up to 3 min; API sometimes reports 181s for 3-min clips
 
 
 def discover_unlisted_via_api(service) -> list[dict]:
@@ -222,6 +222,7 @@ def discover_unlisted_via_api(service) -> list[dict]:
             duration_sec = _parse_iso_duration(
                 item.get("contentDetails", {}).get("duration", "")
             )
+            live_broadcast = snippet.get("liveBroadcastContent", "none")
             api_data[vid_id] = {
                 "id": vid_id,
                 "title": snippet.get("title", ""),
@@ -233,7 +234,12 @@ def discover_unlisted_via_api(service) -> list[dict]:
                 "view_count": None,
                 "availability": privacy,
                 "_duration_sec": duration_sec,
+                "_is_live": live_broadcast in ("live", "upcoming") or "is live" in snippet.get("title", "").lower(),
             }
+
+    # 4. Merge: update availability on existing entries, add missing ones
+    existing = load_json(VIDEOS_JSON) or []
+    existing_map = {v["id"]: v for v in existing}
 
     # Video IDs that appeared in the playlist but had no metadata returned —
     # these are private, still processing, or deleted. Mark them so transcripts are skipped.
@@ -243,14 +249,9 @@ def discover_unlisted_via_api(service) -> list[dict]:
               f"(private / still processing / deleted):")
         for vid in invisible:
             print(f"  https://studio.youtube.com/video/{vid}/edit")
-        # Update availability for any invisible IDs already in videos.json
         for v in existing:
             if v["id"] in invisible:
                 v["availability"] = "private"
-
-    # 4. Merge: update availability on existing entries, add missing ones
-    existing = load_json(VIDEOS_JSON) or []
-    existing_map = {v["id"]: v for v in existing}
 
     for v in existing:
         if v["id"] in api_data:
@@ -258,15 +259,22 @@ def discover_unlisted_via_api(service) -> list[dict]:
 
     from config.settings import TRANSCRIPTS_DIR, GENERATED_DIR
 
-    # Stash durations before modifying api_data so the cleanup pass can use them.
+    # Stash durations and live flags before modifying api_data.
     api_durations: dict[str, int] = {
         vid_id: v.pop("_duration_sec", 0) for vid_id, v in api_data.items()
+    }
+    api_live: dict[str, bool] = {
+        vid_id: v.pop("_is_live", False) for vid_id, v in api_data.items()
     }
 
     new_count = 0
     skipped_long = 0
+    skipped_live = 0
     for vid_id, api_video in api_data.items():
         if vid_id not in existing_map:
+            if api_live.get(vid_id):
+                skipped_live += 1
+                continue  # ignore live streams
             if api_durations.get(vid_id, 0) > _SHORTS_MAX_SECONDS:
                 skipped_long += 1
                 continue  # ignore non-Shorts
@@ -274,7 +282,7 @@ def discover_unlisted_via_api(service) -> list[dict]:
             existing_map[vid_id] = api_video
             new_count += 1
 
-    # Remove any non-Short videos that slipped in before this filter was added.
+    # Remove any non-Short or live-stream videos that slipped in before this filter.
     # Only removes entries with no transcript and no generated metadata (safe to drop).
     cleaned = 0
     kept = []
@@ -282,8 +290,12 @@ def discover_unlisted_via_api(service) -> list[dict]:
         vid_id = v["id"]
         has_transcript = (TRANSCRIPTS_DIR / f"{vid_id}.json").exists()
         has_generated = (GENERATED_DIR / f"{vid_id}_metadata.json").exists()
+        if has_transcript or has_generated:
+            kept.append(v)
+            continue
         dur = api_durations.get(vid_id) or v.get("duration") or 0
-        if dur > _SHORTS_MAX_SECONDS and not has_transcript and not has_generated:
+        is_live = api_live.get(vid_id) or "is live" in v.get("title", "").lower()
+        if dur > _SHORTS_MAX_SECONDS or is_live:
             cleaned += 1
             continue
         kept.append(v)
@@ -292,7 +304,8 @@ def discover_unlisted_via_api(service) -> list[dict]:
     save_json(VIDEOS_JSON, existing)
     unlisted = sum(1 for v in existing if v.get("availability") == "unlisted")
     msg = f"[channel] API merge: {len(existing)} total, {new_count} new Shorts added, {unlisted} unlisted"
-    if skipped_long or cleaned:
-        msg += f" ({skipped_long + cleaned} non-Shorts excluded)"
+    excluded = skipped_long + skipped_live + cleaned
+    if excluded:
+        msg += f" ({excluded} excluded: {skipped_live} live, {skipped_long + cleaned} non-Shorts)"
     print(msg)
     return existing

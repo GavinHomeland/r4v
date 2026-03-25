@@ -31,6 +31,7 @@ GENERATED_DIR = DATA_DIR / "generated"
 APPLIED_DIR = DATA_DIR / "applied"
 VIDEOS_JSON = DATA_DIR / "videos.json"
 CHECK_STATE_JSON = DATA_DIR / "check_state.json"
+UI_PREFS_JSON    = DATA_DIR / "ui_prefs.json"
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 CLR_BG = "#0e0e1c"
@@ -465,8 +466,25 @@ class R4VReviewApp:
         # Remembered geometry for persistent windows
         self._transcript_win_geo: str = ""
 
+        # Sash position memory — loaded from disk before anything else runs
+        self._sash_prefs: dict = (load_json(UI_PREFS_JSON) or {}).get("sashes", {})
+        # Bootstrap log (can't use _sash_log yet — method not bound — so write directly)
+        try:
+            import datetime as _dt2
+            _log = DATA_DIR / "sash_debug.log"
+            with open(_log, "a", encoding="utf-8") as _f:
+                _f.write(f"\n{'='*60}\n{_dt2.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  APP OPEN\n")
+                _f.write(f"LOAD from disk: {self._sash_prefs}\n")
+        except Exception:
+            pass
+        self._vpane = None
+        self._col_panes: list = []
+
         self.root.minsize(880, 600)
         self._build_ui()
+        self.root.state("zoomed")
+        self.root.update_idletasks()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._load_data()
         self.root.after(600, self._check_new_activity)
         self.root.after(1200, self._check_conversation_refresh)
@@ -572,7 +590,13 @@ class R4VReviewApp:
         # Action items moved from action bar
         self._more_menu.add_command(
             label="Pull All \u25b8  \u2014 re-process every video",
-            command=lambda: self._open_pipeline_window(pull_all=True),
+            command=lambda: messagebox.askyesno(
+                "Pull All — Are you sure?",
+                "This re-runs the full pipeline on EVERY video, including ones already approved.\n\n"
+                "It will overwrite generated metadata and could take several minutes.\n\n"
+                "Are you sure?",
+                icon="warning",
+            ) and self._open_pipeline_window(pull_all=True),
         )
         self._more_menu.add_command(
             label="Engage (like + comment)",
@@ -581,6 +605,10 @@ class R4VReviewApp:
         self._more_menu.add_command(
             label="\U0001f3ad Personalities \u2014 edit JT & Gavin voice profiles",
             command=self._edit_personalities,
+        )
+        self._more_menu.add_command(
+            label="\U0001f3f7 Tags & Hashtags \u2014 edit for this video",
+            command=self._edit_tags_hashtags_dialog,
         )
         self._more_menu.add_command(
             label="\U0001f4dd Notes for AI \u2014 corrections for this video",
@@ -658,9 +686,35 @@ class R4VReviewApp:
                 "• Reload data \u2014 refresh the video list from disk\n"
                 "• Reset process bar \u2014 unstick a frozen button (no files changed)")
 
-        # ── Row 2: action bar (right-justified) ───────────────────────────────
+        # ── Row 2: action bar — proc+status left, buttons right ───────────────
         self._action_bar = tk.Frame(self.root, bg=CLR_PANEL, pady=2)
         self._action_bar.pack(fill="x", side="top")
+
+        # Left: proc status (progbar + text + stop) over video counts
+        _left = tk.Frame(self._action_bar, bg=CLR_PANEL)
+        _left.pack(side="left", padx=(10, 20), fill="y", pady=1)
+
+        _proc_row = tk.Frame(_left, bg=CLR_PANEL)
+        _proc_row.pack(side="top", anchor="w")
+        self._stop_btn = tk.Button(
+            _proc_row, text="■ Stop", bg=CLR_SKIP, fg="#000000",
+            font=(FONT_FAMILY, 10, "bold"), relief="flat",
+            padx=8, pady=1, cursor="hand2",
+            command=self._stop_proc, state="disabled",
+        )
+        self._stop_btn.pack(side="left", padx=(0, 8))
+        Tooltip(self._stop_btn, "Stop the currently running task")
+        self._proc_progbar = ttk.Progressbar(_proc_row, mode="indeterminate", length=140)
+        self._proc_progbar.pack(side="left", padx=(0, 8))
+        self._proc_status_var = tk.StringVar(value="Ready")
+        tk.Label(_proc_row, textvariable=self._proc_status_var, bg=CLR_PANEL, fg=CLR_MUTED,
+                 font=(FONT_MONO, 10), anchor="w").pack(side="left")
+
+        _stats_row = tk.Frame(_left, bg=CLR_PANEL)
+        _stats_row.pack(side="top", anchor="w")
+        self._status_bar_var = tk.StringVar(value="Loading…")
+        tk.Label(_stats_row, textvariable=self._status_bar_var, bg=CLR_PANEL, fg=CLR_MUTED,
+                 font=(FONT_FAMILY, 10), anchor="w").pack(side="left")
 
         def _abtn(text: str, cmd, color: str, tip: str, key: str = None) -> tk.Button:
             fg = "#1e1e2e" if color in (CLR_APPROVE, CLR_SKIP, "#89b4fa", "#f9e2af") else CLR_TEXT
@@ -676,7 +730,7 @@ class R4VReviewApp:
             return b
 
         # Pack right-to-left so display order is: + Add Video | Pipeline ▸ | Push → YouTube | ? Help | Exit
-        b_exit = _abtn("Exit", self.root.destroy, CLR_BTN_BG, "Close the review tool")
+        b_exit = _abtn("Exit", self._on_close, CLR_BTN_BG, "Close the review tool")
         b_exit.pack(side="right", padx=(2, 10))
 
         b_help = _abtn("? Help", self._show_help, "#f9e2af",
@@ -720,6 +774,12 @@ class R4VReviewApp:
         # Keyboard navigation (skip when focus is inside a text-editing widget)
         self.root.bind("<Left>",  self._on_left_key)
         self.root.bind("<Right>", self._on_right_key)
+
+
+    def _on_close(self):
+        """Save sash positions then exit."""
+        self._save_sash_prefs()
+        self.root.destroy()
 
     def _on_left_key(self, event):
         if isinstance(event.widget, (tk.Entry, tk.Text)):
@@ -930,14 +990,20 @@ class R4VReviewApp:
     # ── Conversation Refresh ──────────────────────────────────────────────────
 
     def _check_conversation_refresh(self):
-        """On app open, suggest conversation refresh if today is a refresh day (day % 3 == 0)."""
+        """On app open, suggest conversation refresh once per day on refresh days (day % 3 == 0)."""
         import datetime as _dt
         from r4v.conversation_refresh import should_suggest_refresh, get_recently_pushed_video_ids
         if not should_suggest_refresh():
             return
+        today = _dt.date.today().isoformat()
+        prefs = load_json(UI_PREFS_JSON) or {}
+        if prefs.get("refresh_suggested_date") == today:
+            return
         recent = get_recently_pushed_video_ids(days=15)
         if not recent:
             return
+        prefs["refresh_suggested_date"] = today
+        save_json(UI_PREFS_JSON, prefs)
         win = tk.Toplevel(self.root)
         win.title("Conversation Refresh")
         win.configure(bg=CLR_BG)
@@ -1055,19 +1121,21 @@ class R4VReviewApp:
                  font=(FONT_FAMILY, 13, "bold")).pack(pady=(12, 0), padx=12, anchor="w")
 
         responder_var = tk.StringVar()
-        responder_lbl = tk.Label(win, textvariable=responder_var, bg=CLR_BG, fg=CLR_MUTED,
-                                 font=(FONT_FAMILY, 11))
-        responder_lbl.pack(padx=12, anchor="w")
+        progress_var = tk.StringVar(value="")
 
         # Bottom section — pack before existing_txt so it anchors to the bottom
         btn_frame = tk.Frame(win, bg=CLR_BG)
         btn_frame.pack(side="bottom", pady=12)
 
-        progress_var = tk.StringVar(value="")
-        tk.Label(win, textvariable=progress_var, bg=CLR_BG, fg=CLR_MUTED,
-                 font=(FONT_FAMILY, 10)).pack(side="bottom")
+        _info_row = tk.Frame(win, bg=CLR_BG)
+        _info_row.pack(side="bottom", fill="x", padx=12, pady=(0, 4))
+        responder_lbl = tk.Label(_info_row, textvariable=responder_var, bg=CLR_BG, fg=CLR_MUTED,
+                                 font=(FONT_FAMILY, 11))
+        responder_lbl.pack(side="left")
+        tk.Label(_info_row, textvariable=progress_var, bg=CLR_BG, fg=CLR_MUTED,
+                 font=(FONT_FAMILY, 10)).pack(side="left", padx=(16, 0))
 
-        proposed_txt = tk.Text(win, bg="#0d1f30", fg=CLR_TEXT, height=5,
+        proposed_txt = tk.Text(win, bg="#0d1f30", fg=CLR_TEXT, height=10,
                                font=(FONT_MONO, 11), relief="flat", wrap="word",
                                insertbackground=CLR_TEXT)
         proposed_txt.pack(side="bottom", fill="x", padx=12)
@@ -1109,8 +1177,9 @@ class R4VReviewApp:
                        else "janelle" if "janellerhea" in author.lower()
                        else "rstracy" if "rstracy" in author.lower()
                        else None)
+                display_author = "Gavin" if "erictracy" in author.lower() else author
                 prefix = "↳ replying to → " if is_target else ""
-                line = f"{prefix}{author}:\n  {c['text']}\n\n"
+                line = f"{prefix}{display_author}:\n  {c['text']}\n\n"
                 existing_txt.insert("end", line, tag or "")
             existing_txt.config(state="disabled")
             proposed_txt.delete("1.0", "end")
@@ -1162,16 +1231,24 @@ class R4VReviewApp:
             if not confirm:
                 return
             posted = 0
+            # thread_id from a just-posted JT comment, keyed by video_id,
+            # so a pending Gavin reply can be chained to it
+            pending_threads: dict = {}
             for item in approved_items:
-                ok = post_refresh_comment(
+                tid = item.get("reply_to_thread_id", "")
+                if item.get("reply_to_jt_pending"):
+                    tid = pending_threads.get(item["video_id"], "")
+                result = post_refresh_comment(
                     service_jt, service_gavin,
                     item["video_id"], item["final_comment"],
                     item["responder"],
-                    reply_to_thread_id=item.get("reply_to_thread_id", ""),
+                    reply_to_thread_id=tid,
                     dry_run=False,
                 )
-                if ok:
+                if result is not None:
                     posted += 1
+                    if item.get("pair_with_next"):
+                        pending_threads[item["video_id"]] = result
             messagebox.showinfo("Conversation Refresh", f"Posted {posted}/{len(approved_items)} comment(s).")
 
     # ── Footer helper ─────────────────────────────────────────────────────────
@@ -1189,9 +1266,8 @@ class R4VReviewApp:
 
         FOOTER_MARKER = "\nJOIN THE CONVERSATION"
 
-        # Pull hashtags from the sibling Hashtags widget
-        ht_w = self._widgets.get(video_id, {}).get("hashtags")
-        hashtags = ht_w.get().strip() if ht_w else ""
+        # Pull hashtags from meta (Tags & Hashtags dialog saves there directly)
+        hashtags = (self._metadata.get(video_id) or {}).get("hashtags", "")
 
         # Get current description text
         text = prop_w.get("1.0", "end-1c")
@@ -1536,13 +1612,6 @@ class R4VReviewApp:
         widgets: dict = {}
         self._widgets[video_id] = widgets
 
-        if is_locked:
-            tk.Label(
-                card,
-                text="  \U0001f512  APPROVED — all fields locked.   Click  \u21a9 Unapprove  to edit.",
-                bg="#061a06", fg=CLR_APPROVE, font=(FONT_FAMILY, 11, "italic"),
-            ).pack(fill="x", pady=(0, 4))
-
         proposed_title    = meta.get("title", "")
         proposed_desc     = meta.get("description", "")
         proposed_tags     = tags_to_str(meta.get("tags", []))
@@ -1553,20 +1622,17 @@ class R4VReviewApp:
         # that's the real YouTube title, not the video-ID badge shown in the box.
         title_id_str = f"#{idx + 1} of {total}   {video_id}"
 
-        # Extract hashtags from the existing description (they sit at the bottom after the footer)
-        existing_hashtags = " ".join(re.findall(r"#\w+", existing_desc)) if existing_desc else ""
-
         # (label, display_in_current, proposed_val, kind, expands, copyable, copy_source)
         fields = [
-            ("TITLE",       title_id_str,      proposed_title,     "single", False, True, existing_title),
-            ("DESCRIPTION", existing_desc,     proposed_desc,      "multi",  True,  True, existing_desc),
-            ("TAGS",        existing_tags,     proposed_tags,       "single", False, True, existing_tags),
-            ("HASHTAGS",    existing_hashtags, proposed_hashtags,  "single", False, True, existing_hashtags),
+            ("TITLE",       title_id_str,  proposed_title, "single", False, True, existing_title),
+            ("DESCRIPTION", existing_desc, proposed_desc,  "multi",  True,  True, existing_desc),
         ]
 
         vpane = tk.PanedWindow(card, orient=tk.VERTICAL, sashwidth=5,
                                sashrelief="flat", bg=CLR_BORDER, bd=0)
         vpane.pack(fill="both", expand=True)
+        self._vpane = vpane
+        self._col_panes = []
 
         for label, current_val, proposed_val, kind, expands, copyable, copy_source in fields:
             row = tk.Frame(vpane, bg=CLR_PANEL, pady=3)
@@ -1582,6 +1648,7 @@ class R4VReviewApp:
             cols = tk.PanedWindow(row, orient=tk.HORIZONTAL, sashwidth=5,
                                   sashrelief="flat", bg=CLR_BORDER, bd=0)
             cols.pack(fill="both" if expands else "x", expand=expands)
+            self._col_panes.append(cols)
             left_pane = tk.Frame(cols, bg=CLR_PANEL)
             cols.add(left_pane, stretch="always", minsize=100)
 
@@ -1722,6 +1789,10 @@ class R4VReviewApp:
                     _copy_btn.config(state="disabled")
 
             widgets[label.lower()] = prop_w
+
+        # Restore sash positions — two passes: 50ms for layout to settle, 150ms to confirm
+        vpane.after(50, self._restore_sash_prefs)
+        vpane.after(150, self._restore_sash_prefs)
 
         # ── Comment rows (full-width, no Current pane) ───────────────────────
         def _comment_row(parent, label_text, meta_key, fg_color, field_key, tooltip_text):
@@ -2097,7 +2168,7 @@ class R4VReviewApp:
         """Popup to edit AI notes (>> instructions) for the current video."""
         if not self._filtered_ids:
             return
-        video_id = self._filtered_ids[self._current_idx]
+        video_id = self._filtered_ids[self._current_index]
         meta = self._metadata.get(video_id)
         if meta is None:
             messagebox.showinfo("No metadata", "Generate metadata for this video first.")
@@ -2113,7 +2184,7 @@ class R4VReviewApp:
         tk.Label(win, text="Corrections / context for Gemini on next regen:",
                  bg=CLR_BG, fg="#a08060", font=(FONT_FAMILY, 11)).pack(
                      anchor="w", padx=12, pady=(10, 2))
-        tk.Label(win, text='Each line becomes a >> instruction.  Example: "The tour guide is a man, not a woman"',
+        tk.Label(win, text='Each line becomes a [[ instruction.  Example: "The tour guide is a man, not a woman"',
                  bg=CLR_BG, fg=CLR_MUTED, font=(FONT_FAMILY, 10, "italic")).pack(
                      anchor="w", padx=12, pady=(0, 6))
 
@@ -2133,6 +2204,59 @@ class R4VReviewApp:
         btn_frame = tk.Frame(win, bg=CLR_BG)
         btn_frame.pack(pady=(0, 10))
         tk.Button(btn_frame, text="Save & Close", command=lambda: _save(True),
+                  bg=CLR_APPROVE, fg="#000000", font=(FONT_FAMILY, 11, "bold"),
+                  padx=10).pack(side="left", padx=6)
+        tk.Button(btn_frame, text="Cancel", command=win.destroy,
+                  bg=CLR_BTN_BG, fg=CLR_TEXT, font=(FONT_FAMILY, 11),
+                  padx=10).pack(side="left", padx=6)
+        win.bind("<Escape>", lambda _: win.destroy())
+
+    def _edit_tags_hashtags_dialog(self):
+        """Popup to edit Tags and Hashtags for the current video."""
+        if not self._filtered_ids:
+            return
+        video_id = self._filtered_ids[self._current_index]
+        meta = self._metadata.get(video_id)
+        if meta is None:
+            messagebox.showinfo("No metadata", "Generate metadata for this video first.")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title(f"Tags & Hashtags — {video_id}")
+        win.configure(bg=CLR_BG)
+        win.resizable(True, True)
+        win.geometry("700x320")
+        win.transient(self.root)
+
+        # Tags
+        tk.Label(win, text="TAGS  (comma-separated, invisible search keywords)",
+                 bg=CLR_BG, fg=CLR_MUTED, font=(FONT_MONO, 11, "bold")).pack(
+                     anchor="w", padx=12, pady=(12, 2))
+        tags_entry = tk.Entry(win, bg=CLR_BTN_BG, fg=CLR_TEXT, font=(FONT_MONO, 11),
+                              insertbackground=CLR_TEXT, relief="flat")
+        tags_entry.insert(0, tags_to_str(meta.get("tags", [])))
+        tags_entry.pack(fill="x", padx=12, pady=(0, 10))
+
+        # Hashtags
+        tk.Label(win, text="HASHTAGS  (#words that appear as clickable links in description)",
+                 bg=CLR_BG, fg=CLR_MUTED, font=(FONT_MONO, 11, "bold")).pack(
+                     anchor="w", padx=12, pady=(0, 2))
+        ht_txt = tk.Text(win, bg=CLR_BTN_BG, fg=CLR_TEXT, font=(FONT_MONO, 11),
+                         relief="flat", insertbackground=CLR_TEXT, height=5, wrap="word")
+        ht_txt.insert("1.0", meta.get("hashtags", ""))
+        ht_txt.pack(fill="both", expand=True, padx=12, pady=(0, 6))
+        tags_entry.focus_set()
+
+        def _save():
+            self._autosave_current()  # flush description edits first
+            meta["tags"] = str_to_tags(tags_entry.get())
+            meta["hashtags"] = ht_txt.get("1.0", "end-1c").strip()
+            save_json(GENERATED_DIR / f"{video_id}_metadata.json", meta)
+            win.destroy()
+
+        btn_frame = tk.Frame(win, bg=CLR_BG)
+        btn_frame.pack(pady=(0, 10))
+        tk.Button(btn_frame, text="Save & Close", command=_save,
                   bg=CLR_APPROVE, fg="#000000", font=(FONT_FAMILY, 11, "bold"),
                   padx=10).pack(side="left", padx=6)
         tk.Button(btn_frame, text="Cancel", command=win.destroy,
@@ -2221,6 +2345,79 @@ class R4VReviewApp:
         self._reset_proc()
         self._proc_status_var.set("■ Stopped")
 
+    # ── Sash position memory ──────────────────────────────────────────────────
+
+    def _sash_log(self, msg: str):
+        try:
+            import datetime as _dt
+            log = DATA_DIR / "sash_debug.log"
+            with open(log, "a", encoding="utf-8") as f:
+                f.write(f"{_dt.datetime.now().strftime('%H:%M:%S')}  {msg}\n")
+        except Exception:
+            pass
+
+    def _save_sash_prefs(self):
+        """Read live sash positions from widgets and save to ui_prefs.json."""
+        try:
+            if self._vpane and self._vpane.winfo_exists():
+                vsashes = []
+                for i in range(4):
+                    try:
+                        vsashes.append(self._vpane.sash_coord(i)[1])
+                    except Exception:
+                        break
+                if vsashes:
+                    self._sash_prefs["vpane"] = vsashes
+                self._sash_log(f"SAVE vpane sash_coord → {vsashes}")
+            else:
+                self._sash_log("SAVE vpane: no widget")
+            hsashes = []
+            for idx, pane in enumerate(self._col_panes):
+                try:
+                    x = pane.sash_coord(0)[0] if pane.winfo_exists() else None
+                    hsashes.append(x)
+                    self._sash_log(f"SAVE hpane[{idx}] sash_coord → {x}  (pane width={pane.winfo_width()})")
+                except Exception as e:
+                    hsashes.append(None)
+                    self._sash_log(f"SAVE hpane[{idx}] ERROR: {e}")
+            if any(x is not None for x in hsashes):
+                self._sash_prefs["hpane"] = hsashes
+            if self._sash_prefs:
+                prefs = load_json(UI_PREFS_JSON) or {}
+                prefs["sashes"] = self._sash_prefs
+                save_json(UI_PREFS_JSON, prefs)
+                self._sash_log(f"SAVE written to disk: {self._sash_prefs}")
+            else:
+                self._sash_log("SAVE skipped — _sash_prefs empty")
+        except Exception as e:
+            self._sash_log(f"SAVE exception: {e}")
+
+    def _restore_sash_prefs(self):
+        """Apply _sash_prefs to the current card's paned windows."""
+        self._sash_log(f"RESTORE called  prefs={self._sash_prefs}")
+        try:
+            for i, y in enumerate(self._sash_prefs.get("vpane", [])):
+                try:
+                    self._vpane.sash_place(i, 0, int(y))
+                    self._sash_log(f"RESTORE vpane sash {i} → y={y}")
+                except Exception as e:
+                    self._sash_log(f"RESTORE vpane sash {i} ERROR: {e}")
+            saved_h = self._sash_prefs.get("hpane", [])
+            for idx, pane in enumerate(self._col_panes):
+                try:
+                    if idx < len(saved_h) and saved_h[idx] is not None:
+                        x = int(saved_h[idx])
+                    else:
+                        # Default 40:60 split
+                        x = int(pane.winfo_width() * 0.40)
+                    pane.sash_place(0, x, 0)
+                    after_x = pane.sash_coord(0)[0]
+                    self._sash_log(f"RESTORE hpane[{idx}] → x={x}  verify after={after_x}  pane_w={pane.winfo_width()}")
+                except Exception as e:
+                    self._sash_log(f"RESTORE hpane[{idx}] ERROR: {e}")
+        except Exception as e:
+            self._sash_log(f"RESTORE exception: {e}")
+
     def _reset_proc(self):
         """Force-reset the process-running flag — use when ⚡ or a button does nothing."""
         if hasattr(self, "_stop_btn"):
@@ -2240,27 +2437,36 @@ class R4VReviewApp:
     # ── Push to YouTube ───────────────────────────────────────────────────────
 
     def _push_approved(self):
-        approved = [
+        approved_unordered = [
             vid for vid, m in self._metadata.items() if m.get("approved") is True
         ]
-        if not approved:
+        if not approved_unordered:
             messagebox.showinfo("Nothing to push", "No videos are marked Approved yet.")
             return
 
-        confirm = messagebox.askyesno(
-            "Push to YouTube?",
-            f"Push metadata updates for {len(approved)} approved video(s) to YouTube?\n\n"
-            "Sets title, description, tags → makes Public → adds to playlist.\n"
-            "Progress shown in the status bar. UI reloads automatically when done.",
-        )
-        if not confirm:
-            return
+        # Sort by upload_date ascending (oldest content scheduled first)
+        def _sort_key(vid):
+            return self._video_map.get(vid, {}).get("upload_date", "") or ""
+        approved = sorted(approved_unordered, key=_sort_key)
 
-        pushed_ids = list(approved)  # snapshot before subprocess
+        schedule_map = self._push_schedule_dialog(approved)
+        if schedule_map is None:
+            return  # cancelled
+
+        is_scheduled = bool(schedule_map)
+
+        # Write publish_at timestamps into metadata files before launching CLI
+        if is_scheduled:
+            for vid, ts in schedule_map.items():
+                meta = self._metadata.get(vid)
+                if meta:
+                    meta["publish_at"] = ts
+                    save_json(GENERATED_DIR / f"{vid}_metadata.json", meta)
+
+        pushed_ids = list(approved)
 
         def _on_push_done(rc):
             if rc == 0:
-                # Mark successfully pushed videos as "external" so they leave the queue
                 newly_applied = [
                     vid for vid in pushed_ids
                     if (APPLIED_DIR / f"{vid}_applied.json").exists()
@@ -2269,9 +2475,19 @@ class R4VReviewApp:
                     meta = load_json(GENERATED_DIR / f"{vid}_metadata.json")
                     if meta:
                         meta["approved"] = "external"
+                        meta.pop("publish_at", None)  # consumed — clean up
                         save_json(GENERATED_DIR / f"{vid}_metadata.json", meta)
                 self._load_data()
                 count = len(newly_applied)
+
+                if is_scheduled:
+                    first_ts = schedule_map.get(pushed_ids[0], "")[:16].replace("T", " ") if pushed_ids else ""
+                    self._proc_status_var.set(
+                        f"\u2713 Scheduled {count}/{len(pushed_ids)} video(s) — "
+                        f"first releases {first_ts} UTC"
+                    )
+                    return  # no auto-engage for scheduled releases
+
                 self._proc_status_var.set(
                     f"\u2713 Pushed {count}/{len(pushed_ids)} video(s) \u2014 Engage starts in 4 seconds..."
                 )
@@ -2302,7 +2518,6 @@ class R4VReviewApp:
                     "Check the progress log for details.",
                 )
 
-        # Pass video IDs directly so cli.py push doesn't rely on list_approved_updates()
         push_args = ["cli.py", "push"]
         for vid in pushed_ids:
             push_args += ["--video-id", vid]
@@ -2314,122 +2529,286 @@ class R4VReviewApp:
             on_done=_on_push_done,
         )
 
-    def _add_video_dialog(self):
-        """Open a dialog to add an unlisted/private video by pasting its URL or ID."""
-        import re as _re
+    def _push_schedule_dialog(self, approved_ids: list[str]):
+        """Modal dialog: push now or schedule over 21.3h.
+
+        Returns {} for push-now, {video_id: RFC3339_utc_str, ...} for schedule,
+        or None if cancelled.
+        """
+        from datetime import datetime, timezone, timedelta
+
+        n = len(approved_ids)
+        result_holder = [None]
+
         win = tk.Toplevel(self.root)
-        win.title("Add Video by URL")
+        win.title(f"Push {n} video(s) to YouTube")
         win.configure(bg=CLR_BG)
-        win.resizable(True, True)
-        win.geometry("540x200")
-        win.update_idletasks()
-        x = (win.winfo_screenwidth() - 540) // 2
-        y = (win.winfo_screenheight() - 200) // 2
-        win.geometry(f"540x200+{x}+{y}")
+        win.resizable(False, False)
+        win.transient(self.root)
         win.grab_set()
 
-        tk.Label(win, text="Paste a YouTube URL, Studio URL, or bare video ID:",
-                 bg=CLR_BG, fg=CLR_TEXT, font=("Segoe UI", 12)).pack(pady=(16, 4), padx=16, anchor="w")
+        # ── Mode selector ────────────────────────────────────────────────────
+        mode_var = tk.StringVar(value="now")
 
-        entry_var = tk.StringVar()
-        entry = tk.Entry(win, textvariable=entry_var, bg=CLR_BTN_BG, fg=CLR_TEXT,
-                         insertbackground=CLR_TEXT, font=("Segoe UI", 12), width=60)
-        entry.pack(padx=16, fill="x")
-        entry.focus_set()
+        hdr = tk.Frame(win, bg=CLR_BG)
+        hdr.pack(fill="x", padx=16, pady=(14, 6))
+        tk.Label(hdr, text=f"Push {n} approved video(s) to YouTube",
+                 bg=CLR_BG, fg=CLR_TEXT, font=(FONT_FAMILY, 13, "bold")).pack(anchor="w")
+
+        # ── Schedule options (shown/hidden) ──────────────────────────────────
+        sched_frame = tk.Frame(win, bg=CLR_BG)
+
+        modes = tk.Frame(win, bg=CLR_BG)
+        modes.pack(fill="x", padx=16, pady=4)
+
+        # Default start: next round hour in local time
+        _now = datetime.now()
+        _default_start = (_now.replace(minute=0, second=0, microsecond=0)
+                          + timedelta(hours=1))
+        start_var = tk.StringVar(value=_default_start.strftime("%Y-%m-%d %H:%M"))
+
+        sf_top = tk.Frame(sched_frame, bg=CLR_BG)
+        sf_top.pack(fill="x", pady=(6, 2))
+        tk.Label(sf_top, text="Start (local time):", bg=CLR_BG, fg=CLR_MUTED,
+                 font=(FONT_FAMILY, 11)).pack(side="left")
+        start_entry = tk.Entry(sf_top, textvariable=start_var, width=18,
+                               bg=CLR_PANEL, fg=CLR_TEXT, insertbackground=CLR_TEXT,
+                               font=(FONT_MONO, 11), relief="flat")
+        start_entry.pack(side="left", padx=(6, 0))
+        interval_lbl = tk.Label(sf_top, text="", bg=CLR_BG, fg=CLR_MUTED,
+                                font=(FONT_FAMILY, 10, "italic"))
+        interval_lbl.pack(side="left", padx=(12, 0))
+
+        preview_txt = tk.Text(sched_frame, height=min(n, 8), width=58,
+                              bg=CLR_PANEL, fg=CLR_TEXT, font=(FONT_MONO, 10),
+                              relief="flat", state="disabled")
+        preview_txt.pack(fill="x", pady=(4, 0))
+
+        def _update_preview(*_):
+            try:
+                local_tz = datetime.now().astimezone().tzinfo
+                local_dt = (datetime.strptime(start_var.get().strip(), "%Y-%m-%d %H:%M")
+                            .replace(tzinfo=local_tz))
+            except ValueError:
+                interval_lbl.config(text="(invalid date)")
+                preview_txt.config(state="normal")
+                preview_txt.delete("1.0", "end")
+                preview_txt.config(state="disabled")
+                return
+
+            interval = timedelta(minutes=21*60+18) / n if n > 1 else timedelta(0)
+            total_mins = int(interval.total_seconds() / 60)
+            if total_mins >= 60:
+                h, m = divmod(total_mins, 60)
+                iv_str = f"every {h}h" + (f" {m}m" if m else "")
+            else:
+                iv_str = f"every {total_mins}m"
+            interval_lbl.config(text=f"— {iv_str}")
+
+            preview_txt.config(state="normal")
+            preview_txt.delete("1.0", "end")
+            for i, vid in enumerate(approved_ids):
+                slot = local_dt + interval * i
+                title = (self._video_map.get(vid, {}).get("title")
+                         or self._metadata.get(vid, {}).get("existing_title", vid))[:38]
+                preview_txt.insert("end",
+                    f"{i+1:2}. {slot.strftime('%b %d %I:%M %p')}  {title}\n")
+            preview_txt.config(state="disabled")
+
+        start_var.trace_add("write", _update_preview)
+
+        def _toggle():
+            if mode_var.get() == "schedule":
+                sched_frame.pack(fill="x", padx=16, pady=(0, 6))
+                _update_preview()
+            else:
+                sched_frame.pack_forget()
+            win.update_idletasks()
+
+        for val, lbl in [("now",      "Push now — make all Public immediately"),
+                          ("schedule", "Schedule over 21.3 hours")]:
+            tk.Radiobutton(modes, text=lbl, variable=mode_var, value=val,
+                           bg=CLR_BG, fg=CLR_TEXT, selectcolor=CLR_BG,
+                           activebackground=CLR_BG, activeforeground=CLR_TEXT,
+                           font=(FONT_FAMILY, 11), command=_toggle).pack(anchor="w", pady=1)
+
+        # ── Buttons ──────────────────────────────────────────────────────────
+        btn_row = tk.Frame(win, bg=CLR_BG)
+        btn_row.pack(pady=(8, 14))
+
+        def _cancel():
+            result_holder[0] = None
+            win.destroy()
+
+        def _confirm():
+            if mode_var.get() == "now":
+                result_holder[0] = {}
+                win.destroy()
+                return
+            # Build schedule map
+            try:
+                local_tz = datetime.now().astimezone().tzinfo
+                local_dt = (datetime.strptime(start_var.get().strip(), "%Y-%m-%d %H:%M")
+                            .replace(tzinfo=local_tz))
+            except ValueError:
+                messagebox.showerror("Invalid date",
+                                     "Enter start time as YYYY-MM-DD HH:MM", parent=win)
+                return
+            utc_start = local_dt.astimezone(timezone.utc)
+            interval = timedelta(minutes=21*60+18) / n if n > 1 else timedelta(0)
+            smap = {}
+            for i, vid in enumerate(approved_ids):
+                slot = utc_start + interval * i
+                smap[vid] = slot.strftime("%Y-%m-%dT%H:%M:%SZ")
+            result_holder[0] = smap
+            win.destroy()
+
+        tk.Button(btn_row, text="Cancel", command=_cancel,
+                  bg=CLR_BTN_BG, fg=CLR_TEXT, font=(FONT_FAMILY, 11),
+                  padx=10, relief="flat").pack(side="left", padx=6)
+        tk.Button(btn_row, text="Confirm", command=_confirm,
+                  bg=CLR_APPROVE, fg="#000000", font=(FONT_FAMILY, 11, "bold"),
+                  padx=14, relief="flat").pack(side="left", padx=6)
+
+        win.bind("<Escape>", lambda _: _cancel())
+        win.bind("<Return>", lambda _: _confirm())
+        win.update_idletasks()
+        cx = (win.winfo_screenwidth()  - win.winfo_width())  // 2
+        cy = (win.winfo_screenheight() - win.winfo_height()) // 2
+        win.geometry(f"+{cx}+{cy}")
+        win.wait_window()
+        return result_holder[0]
+
+    def _add_video_dialog(self):
+        """Open a dialog to add videos by pasting URLs or IDs — one per line."""
+        import re as _re
+        win = tk.Toplevel(self.root)
+        win.title("Add Video(s) by URL")
+        win.configure(bg=CLR_BG)
+        win.resizable(True, True)
+        win.geometry("560x300")
+        win.update_idletasks()
+        x = (win.winfo_screenwidth() - 560) // 2
+        y = (win.winfo_screenheight() - 300) // 2
+        win.geometry(f"560x300+{x}+{y}")
+        win.grab_set()
+
+        tk.Label(win, text="Paste YouTube URLs or video IDs — one per line:",
+                 bg=CLR_BG, fg=CLR_TEXT, font=("Segoe UI", 12)).pack(pady=(14, 4), padx=16, anchor="w")
+
+        txt = tk.Text(win, bg=CLR_BTN_BG, fg=CLR_TEXT, insertbackground=CLR_TEXT,
+                      font=("Segoe UI", 11), height=6, relief="flat", wrap="word")
+        txt.pack(padx=16, fill="both", expand=True)
+        txt.focus_set()
 
         status_var = tk.StringVar()
-        status_lbl = tk.Entry(win, textvariable=status_var, bg=CLR_BG, fg=CLR_SKIP,
-                              font=("Segoe UI", 11), relief="flat", state="readonly",
-                              readonlybackground=CLR_BG, bd=0)
+        status_lbl = tk.Label(win, textvariable=status_var, bg=CLR_BG, fg=CLR_MUTED,
+                              font=("Segoe UI", 10, "italic"), anchor="w")
         status_lbl.pack(pady=(4, 0), padx=16, fill="x")
 
-        def _extract_id(text: str) -> str | None:
-            text = text.strip()
-            # studio.youtube.com/video/VIDEO_ID/...
-            m = _re.search(r"studio\.youtube\.com/video/([A-Za-z0-9_-]{11})", text)
-            if m:
-                return m.group(1)
-            # youtube.com/watch?v=, /shorts/, youtu.be/
-            m = _re.search(r"(?:v=|shorts/|youtu\.be/)([A-Za-z0-9_-]{11})", text)
-            if m:
-                return m.group(1)
-            # bare 11-char ID
-            if _re.fullmatch(r"[A-Za-z0-9_-]{11}", text):
-                return text
-            return None
+        def _extract_ids(raw: str) -> list[str]:
+            seen, ids = set(), []
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                m = (_re.search(r"studio\.youtube\.com/video/([A-Za-z0-9_-]{11})", line)
+                     or _re.search(r"(?:v=|shorts/|youtu\.be/)([A-Za-z0-9_-]{11})", line))
+                vid = m.group(1) if m else (line if _re.fullmatch(r"[A-Za-z0-9_-]{11}", line) else None)
+                if vid and vid not in seen:
+                    seen.add(vid)
+                    ids.append(vid)
+            return ids
 
         def _do_add():
-            video_id = _extract_id(entry_var.get())
-            if not video_id:
-                status_var.set("Could not find a video ID in that URL — check and try again.")
+            raw = txt.get("1.0", "end-1c")
+            ids = _extract_ids(raw)
+            if not ids:
+                status_var.set("No valid video IDs found — check your URLs.")
+                status_lbl.config(fg=CLR_SKIP)
                 return
-            status_var.set(f"Fetching metadata for {video_id} ...")
+
+            status_var.set(f"Fetching {len(ids)} video(s)...")
+            status_lbl.config(fg=CLR_MUTED)
             win.update_idletasks()
+
             try:
                 from r4v.auth import get_youtube_service
-                from r4v.storage import load_json, save_json
-                from config.settings import VIDEOS_JSON
+                status_var.set(f"Parsed {len(ids)} ID(s): {', '.join(ids)}")
+                status_lbl.config(fg=CLR_MUTED)
+                win.update_idletasks()
+
                 service = get_youtube_service()
-                resp = service.videos().list(part="snippet,status", id=video_id).execute()
-                items = resp.get("items", [])
-                if not items:
-                    status_var.set(f"No video found for {video_id} — may be private or invalid.")
-                    return
-                item = items[0]
-                snippet = item.get("snippet", {})
-                privacy = item.get("status", {}).get("privacyStatus", "public")
-                video = {
-                    "id": video_id,
-                    "title": snippet.get("title", ""),
-                    "url": f"https://www.youtube.com/shorts/{video_id}",
-                    "upload_date": snippet.get("publishedAt", "")[:10].replace("-", ""),
-                    "description": snippet.get("description", ""),
-                    "tags": snippet.get("tags", []),
-                    "duration": None,
-                    "view_count": None,
-                    "availability": privacy,
-                }
+                status_var.set("Auth OK — calling API...")
+                win.update_idletasks()
+
+                # Fetch all in one API call (up to 50)
+                resp = service.videos().list(
+                    part="snippet,status", id=",".join(ids)
+                ).execute()
+                api_items = {item["id"]: item for item in resp.get("items", [])}
+                status_var.set(f"API returned {len(api_items)} item(s) — saving...")
+                win.update_idletasks()
+
                 videos = load_json(VIDEOS_JSON) or []
-                existing_ids = {v["id"] for v in videos}
-                if video_id in existing_ids:
-                    for v in videos:
-                        if v["id"] == video_id:
-                            v.update(video)
-                            break
-                    action = "Updated"
-                else:
-                    videos.append(video)
-                    action = "Added"
+                existing_map = {v["id"]: v for v in videos}
+                added, updated, missing = [], [], []
+
+                for vid in ids:
+                    if vid not in api_items:
+                        missing.append(vid)
+                        continue
+                    item = api_items[vid]
+                    snippet = item.get("snippet", {})
+                    privacy = item.get("status", {}).get("privacyStatus", "public")
+                    video = {
+                        "id": vid,
+                        "title": snippet.get("title", ""),
+                        "url": f"https://www.youtube.com/shorts/{vid}",
+                        "upload_date": snippet.get("publishedAt", "")[:10].replace("-", ""),
+                        "description": snippet.get("description", ""),
+                        "tags": snippet.get("tags", []),
+                        "duration": None,
+                        "view_count": None,
+                        "availability": privacy,
+                    }
+                    if vid in existing_map:
+                        existing_map[vid].update(video)
+                        updated.append(vid)
+                    else:
+                        videos.append(video)
+                        existing_map[vid] = video
+                        added.append(vid)
+
                 save_json(VIDEOS_JSON, videos)
                 self._load_data(skip_autosave=True)
-                self._proc_status_var.set(f"{action}: '{video['title']}' ({privacy})")
-                status_var.set(f"\u2713 {action}: {video['title']}")
-                status_lbl.config(fg=CLR_APPROVE)
-                entry_var.set("")
-                entry.focus_set()
+
+                parts = []
+                if added:
+                    parts.append(f"{len(added)} added")
+                if updated:
+                    parts.append(f"{len(updated)} updated")
+                if missing:
+                    parts.append(f"{len(missing)} not found: {missing}")
+                summary = " · ".join(parts)
+                status_var.set(f"✓ {summary}")
+                status_lbl.config(fg=CLR_APPROVE if not missing else CLR_MUTED)
+                self._proc_status_var.set(f"Add Video: {summary}")
+                txt.delete("1.0", "end")
             except Exception as exc:
                 msg = str(exc)
                 if "invalid_grant" in msg or "Token has been expired" in msg:
-                    msg = "OAuth token expired — close this dialog, then try again to re-authenticate in your browser."
+                    msg = "OAuth token expired — close and re-authenticate."
                 status_var.set(f"Error: {msg}")
                 status_lbl.config(fg=CLR_SKIP)
 
-        def _paste_clip(event=None):
-            try:
-                entry_var.set(win.clipboard_get().strip())
-                entry.icursor("end")
-            except tk.TclError:
-                pass
-
         btn_frame = tk.Frame(win, bg=CLR_BG)
-        btn_frame.pack(pady=(8, 0))
+        btn_frame.pack(pady=(8, 10))
         tk.Button(btn_frame, text="Add", command=_do_add, bg="#89b4fa", fg="#1e1e2e",
                   font=("Segoe UI", 12, "bold"), padx=12).pack(side="left", padx=6)
         tk.Button(btn_frame, text="Close", command=win.destroy, bg=CLR_BTN_BG, fg=CLR_TEXT,
                   font=("Segoe UI", 12), padx=12).pack(side="left", padx=6)
-        entry.bind("<Return>", lambda _: _do_add())
-        entry.bind("<Escape>", lambda _: win.destroy())
-        entry.bind("<Button-3>", _paste_clip)
+        win.bind("<Escape>", lambda _: win.destroy())
 
     def _show_help(self):
         win = tk.Toplevel(self.root)
@@ -2505,59 +2884,14 @@ class R4VReviewApp:
     # ── Bottom process bar ────────────────────────────────────────────────────
 
     def _build_bottom_bar(self):
+        """Initialise process-runner state. UI widgets live in the action bar (built in _build_ui)."""
         self._proc_q: queue.Queue = queue.Queue()
         self._proc_running = False
-        self._proc_subprocess = None  # current running subprocess (for STOP)
-        # _proc_buttons is already initialised in __init__; populated by _build_ui
+        self._proc_subprocess = None
         self._proc_current_btn = None
         self._proc_current_label = ""
         self._proc_auto_reload = False
         self._proc_on_done = None
-
-        # ── Status bar — very bottom ──────────────────────────────────────────
-        status_bar = tk.Frame(self.root, bg=CLR_PANEL)
-        status_bar.pack(fill="x", side="bottom")
-        tk.Frame(status_bar, bg=CLR_BORDER, height=1).pack(fill="x")
-        self._status_bar_var = tk.StringVar(value="Loading…")
-        tk.Label(
-            status_bar, textvariable=self._status_bar_var,
-            bg=CLR_PANEL, fg=CLR_MUTED,
-            font=(FONT_FAMILY, 11), anchor="w", padx=12, pady=2,
-        ).pack(fill="x")
-
-        # ── Process bar — above status bar ───────────────────────────────────
-        proc_bar = tk.Frame(self.root, bg=CLR_PANEL)
-        proc_bar.pack(fill="x", side="bottom")
-        tk.Frame(proc_bar, bg=CLR_BORDER, height=1).pack(fill="x")
-
-        proc_row = tk.Frame(proc_bar, bg=CLR_PANEL, pady=3)
-        proc_row.pack(fill="x", padx=10)
-
-        self._proc_progbar = ttk.Progressbar(proc_row, mode="indeterminate", length=180)
-        self._proc_progbar.pack(side="left", padx=(0, 10))
-
-        # Status + Stop sit together in an expanding frame; Stop follows status text directly
-        _mid = tk.Frame(proc_row, bg=CLR_PANEL)
-        _mid.pack(side="left", fill="x", expand=True)
-
-        self._proc_status_var = tk.StringVar(value="Ready")
-        tk.Label(
-            _mid, textvariable=self._proc_status_var,
-            bg=CLR_PANEL, fg=CLR_MUTED,
-            font=(FONT_MONO, 10), anchor="w",
-        ).pack(side="left")
-
-        self._stop_btn = tk.Button(
-            _mid, text="■ Stop",
-            bg=CLR_SKIP, fg="#000000",
-            font=(FONT_FAMILY, 10, "bold"), relief="flat",
-            padx=8, pady=2, cursor="hand2",
-            command=self._stop_proc,
-            state="disabled",
-        )
-        self._stop_btn.pack(side="left", padx=(12, 0))
-        Tooltip(self._stop_btn, "Stop the currently running task")
-
         self.root.after(100, self._poll_proc_q)
 
     def _run_cli(self, label: str, args: list, btn, auto_reload: bool = False, on_done=None):

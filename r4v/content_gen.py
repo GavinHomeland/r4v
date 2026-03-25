@@ -24,9 +24,6 @@ def _load_jt_profile() -> str:
     except Exception:
         return ""
 
-    comment_opener = jt.get("comment_opener", "Hey, brother —")
-    comment_variants = jt.get("comment_opener_variants", [comment_opener])
-
     lines = [
         f"ABOUT JT: {jt.get('background', '')}",
         "",
@@ -39,14 +36,11 @@ def _load_jt_profile() -> str:
             )
         ),
         "",
-        f"COMMENT OPENER (for YouTube comments — brotherly, personal, NOT 'Hello friend!'):",
-        f"  Default: {comment_opener}",
-        "  Variants (pick based on the video's mood):",
-    ]
-    for v in comment_variants:
-        lines.append(f"    - \"{v}\"")
-    lines += [
-        "  NEVER open a comment with 'Hello friend!' — that opener is for video descriptions only.",
+        "COMMENT STYLE (for YouTube comments — NOT descriptions):",
+        "  - No greeting, no opener — just launch straight into the reaction or reply",
+        "  - NEVER open with 'Hello friend!' — that opener is for video descriptions only",
+        "  - If someone in the thread asked a question, answer it directly",
+        "  - NEVER reply to a comment posted by the same account",
         "",
         "HIS CATCHPHRASES (use naturally when relevant):",
     ]
@@ -97,20 +91,17 @@ def _load_gavin_profile() -> str:
 
     priorities = gavin.get("editorial_priorities", [])
 
-    opener = gavin.get("comment_opener", "Hi, Brother")
-    opener_variants = gavin.get("comment_opener_variants", [opener])
     lines = [
         "ABOUT GAVIN (JT's brother — writes comment_gavin ONLY, not descriptions):",
         f"  {gavin.get('relationship_to_jt', '')}",
         "",
         "GAVIN'S COMMENT RULES:",
-        f"  - Gavin is JT's actual brother. He always opens with '{opener}' + relevant emoji as the ENTIRE first line",
-        "  - Then a blank line (\\n\\n), then 1-2 sentences",
-        "  - Responds DIRECTLY to JT's specific words in comment_jt — reference them explicitly",
+        "  - No greeting, no opener — just launch straight into the reply",
+        "  - 1-2 sentences responding directly to JT's specific words in comment_jt — reference them explicitly",
         "  - Warm, slightly goofy tone; may briefly mention the Kansas farm (pigs, brassicas, guinea fowl)",
         "  - Every 3rd or 4th comment: append a non-sequitur 'Real Life Hack' using one lead-in + one hack",
-        f"  - Opener variants (pick one): {', '.join(repr(v) for v in opener_variants)}",
-        f"  - Format: \"{opener} 🐷\\n\\n[1-2 sentences responding to JT's comment]\"",
+        "  - If JT's comment contains a question, answer it",
+        "  - NEVER reply to a comment posted by the same account",
         "",
         "GAVIN'S EDITORIAL PRIORITIES:",
     ]
@@ -329,10 +320,9 @@ EXISTING DESCRIPTION:
 
 Read the existing description above carefully. If it reads as natural, flowing prose or narrative —
 JT talking to fans, telling a story — treat it as the tone benchmark: study how he writes and match
-that voice. If it contains lines starting with ">>" or disjointed fragments (a name spelling, a
-specific detail to weave in, a person or place to mention) — treat those as explicit instructions
-you MUST follow for this video. A description can contain both: prose sections to model and ">>"
-lines to execute.
+that voice. If it contains lines starting with "[[" — treat those as explicit editor instructions
+you MUST follow for this video (e.g. a name spelling, a detail to include, a correction).
+A description can contain both: prose sections to model and "[[" lines to execute.
 
 {local_color_hint}{ai_notes_block}FULL TRANSCRIPT:
 {transcript_text}
@@ -356,23 +346,12 @@ a string of encounters; follow the thread. Zoom out to the mission when it fits 
 stay close to the moment when it doesn't.
 
 comment_jt is WRITTEN BY JT (@roll4veterans). JT was there — he's commenting on his own video.
-Pick the opener from this list that fits the specific moment or mood of THIS video:
-  "Man, I tell you what —"  → something that blew him away
-  "Dude..."                 → something surprising or unexpected
-  "Hey, friends —"          → warm, inviting, casual check-in
-  "Hey there —"             → direct and personal
-  "Hey, friend —"           → talking to one person in the comments
-  "Appreciate you being here —" → grateful, sincere moment
-  "Glad you're along for the ride —" → forward momentum, adventure feel
-  "Well, here's the thing —" → about to share something specific
-  "I'm not gonna lie —"     → honest admission, something caught him off guard
-The opener must fit what JT actually experienced. Do NOT always pick "Man, I tell you what —".
-Then + one relevant emoji on that same line. Blank line (\\n\\n). Then 1-2 sentences: \
-specific reaction to what happened, then a question for the audience or an invitation to share. \
+No greeting, no opener — jump straight into a specific reaction to what happened. \
+Drop one relevant emoji naturally in the text (not at the start). 1-2 sentences max. \
+End with a question for viewers or an invitation to share. \
 JT speaks from experience — he does NOT ask himself what something was like. MUST NOT be empty.
 
-comment_gavin is WRITTEN BY GAVIN from his @erictracy5584 account. Gavin is JT's actual brother, watching from his farm in Kansas and replying to comment_jt. Open with "Hi, Brother"/"Hi, Bro"/"Hey, Bro" + emoji on first line, blank line (\n\n), then 1-2 sentences reacting to JT's specific words. Warm, slightly goofy. {gavin_hack_hint}MUST NOT be empty.
-Format: "Hi, Brother 🌽\n\n[Gavin's reaction to what JT said in comment_jt]"
+comment_gavin is WRITTEN BY GAVIN from his @erictracy5584 account. Gavin is JT's actual brother, watching from his farm in Kansas and replying to comment_jt. No greeting — just dive straight into 1-2 sentences reacting to JT's specific words. Warm, slightly goofy. If JT's comment contains a question, answer it. {gavin_hack_hint}NEVER reply to a comment by the same account. MUST NOT be empty.
 
 For locations: list every specific named place from the transcript (towns, businesses, parks, landmarks). Any place named in the transcript or description MUST appear in this list — do not omit it. Be granular: "Pelican Cove, Destin, FL" beats "Destin, FL". Use JT's route (Key West → Gulf Coast west → Los Angeles → Flagstaff) to disambiguate. If no specific places are named, return [].
 

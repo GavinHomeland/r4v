@@ -100,7 +100,7 @@
         "#MissionRide", "#R4V2026"
       ],
       "content_specific_rules": [
-        "Add #PlanetFitness if mentioned",
+        "For any nationally recognized business, chain, restaurant, gym, or retail brand mentioned in the transcript (e.g. Walmart, Planet Fitness, Subway, Starbucks, Home Depot), add their standard hashtag (e.g. #Walmart, #PlanetFitness, #Subway)",
         "Add service branch hashtags only if mentioned: #USArmy #USNavy #USMC #USAirForce #CoastGuard",
         "Add #FireFighter or #FirstResponders if applicable",
         "Aim for 12-16 total hashtags"
@@ -133,7 +133,7 @@
       "Sounds like Gavin — JT's actual brother, warm, personal, slightly goofy",
       "Uses real names and details from the transcript",
       "Flows naturally — no bullet lists or bold headers",
-      "Starts with 'Hi, Brother' + relevant emoji as the ENTIRE first line (Gavin is talking to his brother JT)",
+      "No opener or greeting — just launch right into the reply",
       "Ends with a genuine call to action or forward-looking line",
       "Mentions farm life in Kansas (pigs, brassicas, guinea fowl) as if from a secure bunker"
     ],
