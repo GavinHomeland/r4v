@@ -340,10 +340,12 @@ FIXED (non-negotiable):
 - End with \\n\\n then a SIGNATURE CLOSER on its own line — pick whichever fits the mood.
 
 {transcript_opening_hint}FEEL (not a formula — let the transcript dictate the shape):
-Write like JT talking to a friend who wasn't there. Structure comes from what actually \
-happened, not from a template. Some videos are one strong moment; write that. Some are \
-a string of encounters; follow the thread. Zoom out to the mission when it fits naturally; \
-stay close to the moment when it doesn't.
+Write like JT talking to a friend who wasn't there. Retell it — don't quote it. \
+Lift the facts and the feeling from the transcript, then put it in JT's own words \
+as if he's telling the story later. A phrase from the transcript is a starting point, \
+not a line to copy. Structure comes from what actually happened, not from a template. \
+Some videos are one strong moment; write that. Some are a string of encounters; \
+follow the thread. Zoom out to the mission when it fits naturally; stay close to the moment when it doesn't.
 
 comment_jt is WRITTEN BY JT (@roll4veterans). JT was there — he's commenting on his own video.
 No greeting, no opener — jump straight into a specific reaction to what happened. \
