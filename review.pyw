@@ -2798,6 +2798,7 @@ class R4VReviewApp:
                 self._proc_status_var.set(f"Add Video: {summary}")
                 if not missing:
                     win.destroy()
+                    self._open_pipeline_window()
                 else:
                     status_var.set(f"✓ {summary}")
                     status_lbl.config(fg=CLR_MUTED)
