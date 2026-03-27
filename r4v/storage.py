@@ -1,5 +1,6 @@
 """JSON persistence helpers."""
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -7,8 +8,10 @@ from typing import Any
 def save_json(path: Path | str, data: Any) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    tmp = path.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, path)  # atomic on NTFS and POSIX
 
 
 def load_json(path: Path | str) -> Any:
@@ -16,7 +19,11 @@ def load_json(path: Path | str) -> Any:
     if not path.exists():
         return None
     with open(path, encoding="utf-8") as f:
-        return json.load(f)
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            print(f"[storage] WARNING: {path} is malformed JSON — treating as empty")
+            return None
 
 
 def list_pending_updates() -> list[str]:

@@ -4,6 +4,8 @@ import zoneinfo
 from config.settings import QUOTA_LOG_JSON, QUOTA_DAILY_LIMIT
 from r4v.storage import load_json, save_json
 
+_MAX_OPS = 200  # cap on stored operations entries
+
 
 class QuotaExceededError(Exception):
     pass
@@ -45,6 +47,9 @@ def consume(units: int, operation: str = "") -> None:
     log = _load_log()
     log["used"] += units
     log["operations"].append({"op": operation, "units": units})
+    # Prune to last _MAX_OPS entries so the file doesn't grow unbounded
+    if len(log["operations"]) > _MAX_OPS:
+        log["operations"] = log["operations"][-_MAX_OPS:]
     save_json(QUOTA_LOG_JSON, log)
 
 

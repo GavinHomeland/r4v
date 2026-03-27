@@ -465,6 +465,7 @@ class R4VReviewApp:
 
         # Remembered geometry for persistent windows
         self._transcript_win_geo: str = ""
+        self._gen_this_btn = None  # current card's ↻ Gen All button (set in _build_video_card)
 
         # Sash position memory — loaded from disk before anything else runs
         self._sash_prefs: dict = (load_json(UI_PREFS_JSON) or {}).get("sashes", {})
@@ -1593,6 +1594,7 @@ class R4VReviewApp:
         _gen_btn.pack(side="left", padx=(6, 2))
         if is_locked:
             _gen_btn.config(state="disabled")
+        self._gen_this_btn = _gen_btn  # kept current so _generate_this can disable it
         Tooltip(_gen_btn, "Re-run Gemini AI for ALL fields of this video\nReloads the card when done  (disabled while Approved/External)")
 
         _txn_btn = self._make_btn(btn_row, "📄 Transcript",
@@ -2021,7 +2023,7 @@ class R4VReviewApp:
         """Run  cli.py generate --video-id {id} --force  for just this one card."""
         if self._proc_running:
             return
-        btn = self._proc_buttons.get("Generate AI")
+        btn = getattr(self, "_gen_this_btn", None)
         self._run_cli(
             f"Gen: {video_id[:14]}",
             ["cli.py", "generate", "--video-id", video_id, "--force"],
@@ -2697,8 +2699,10 @@ class R4VReviewApp:
                  bg=CLR_BG, fg=CLR_TEXT, font=("Segoe UI", 12)).pack(pady=(14, 4), padx=16, anchor="w")
 
         txt = tk.Text(win, bg=CLR_BTN_BG, fg=CLR_TEXT, insertbackground=CLR_TEXT,
-                      font=("Segoe UI", 11), height=6, relief="flat", wrap="word")
+                      font=("Segoe UI", 11), height=10, relief="flat", wrap="word")
         txt.pack(padx=16, fill="both", expand=True)
+        txt.insert("1.0", "\n" * 9)  # pre-fill with blank lines — paste URLs without pressing Enter
+        txt.mark_set("insert", "1.0")
         txt.focus_set()
 
         status_var = tk.StringVar()

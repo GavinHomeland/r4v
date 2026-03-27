@@ -14,14 +14,14 @@ def discover_videos(channel_url: str = CHANNEL_URL, force: bool = False) -> list
     Returns a list of dicts with keys: id, title, url, upload_date, description.
     Results are cached in data/videos.json; pass force=True to re-fetch.
     """
-    if not force and VIDEOS_JSON.exists():
-        existing = load_json(VIDEOS_JSON) or []
-        if existing:
-            print(f"[channel] Loaded {len(existing)} videos from cache. Use --force to refresh.")
-            return existing
+    # Load existing cache — used for early-return in non-force mode and for merging below
+    existing = load_json(VIDEOS_JSON) or []
+    if not force and existing:
+        print(f"[channel] Loaded {len(existing)} videos from cache. Use --force to refresh.")
+        return existing
 
-    # Load existing cache so we can preserve descriptions/tags fetched by fetch_descriptions
-    existing_map = {v["id"]: v for v in (load_json(VIDEOS_JSON) or [])}
+    # Build lookup so we can preserve descriptions/tags fetched by fetch_descriptions
+    existing_map = {v["id"]: v for v in existing}
 
     print(f"[channel] Discovering videos from {channel_url} ...")
     cmd = [
@@ -66,7 +66,7 @@ def discover_videos(channel_url: str = CHANNEL_URL, force: bool = False) -> list
             "upload_date": entry.get("upload_date", ""),
             # Prefer cached description — flat-playlist rarely includes full descriptions
             "description": entry.get("description", "") or cached.get("description", ""),
-            "tags": entry.get("tags") or cached.get("tags") or [],
+            "tags": entry.get("tags") if entry.get("tags") is not None else (cached.get("tags") or []),
             "duration": entry.get("duration") or cached.get("duration"),
             "view_count": entry.get("view_count") or cached.get("view_count"),
             "availability": entry.get("availability", "") or cached.get("availability", ""),
@@ -98,7 +98,8 @@ def fetch_descriptions(
     skip_ids: video IDs to skip (e.g. already-done videos).
     """
     if videos is None:
-        videos = load_json(VIDEOS_JSON) or []
+        loaded = load_json(VIDEOS_JSON)
+        videos = loaded if isinstance(loaded, list) else []
 
     _skip = skip_ids or set()
     missing = [v for v in videos if not v.get("description") and v["id"] not in _skip]

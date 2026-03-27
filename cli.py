@@ -20,12 +20,20 @@ import click
 from config.settings import VIDEOS_JSON, GENERATED_DIR, TRANSCRIPTS_DIR, DATA_DIR, APPLIED_DIR
 
 
+_done_ids_cache: set[str] | None = None
+
+
 def _done_ids() -> set[str]:
     """Return IDs of videos where work is complete: approved (True) or 'Done in Studio'.
 
     These are excluded from all normal pipeline steps so only new/pending videos
     are processed. Pass --all to any command to override.
+    Result is memoized for the lifetime of the process — call _done_ids_invalidate()
+    after generating new metadata if you need a fresh read.
     """
+    global _done_ids_cache
+    if _done_ids_cache is not None:
+        return _done_ids_cache
     done: set[str] = set()
     for p in GENERATED_DIR.glob("*_metadata.json"):
         try:
@@ -34,7 +42,13 @@ def _done_ids() -> set[str]:
                 done.add(p.stem.replace("_metadata", ""))
         except Exception:
             pass
+    _done_ids_cache = done
     return done
+
+
+def _done_ids_invalidate() -> None:
+    global _done_ids_cache
+    _done_ids_cache = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -347,8 +361,8 @@ def engage(dry_run, video_id):
         target_ids = [
             vid for vid in applied_ids
             if not (
-                engagement_log.get(vid, {}).get("liked")
-                and engagement_log.get(vid, {}).get("commented")
+                engagement_log.get(vid, {}).get("liked_jt")
+                and engagement_log.get(vid, {}).get("commented_jt")
             )
         ]
 
@@ -475,6 +489,7 @@ def check(force):
     if to_generate:
         gen_results = generate_all(to_generate, trans_map)
         newly_generated = list(gen_results.keys())
+        _done_ids_invalidate()  # cache stale after new metadata written
         click.echo(f"  ✓ Generated: {len(newly_generated)}")
     else:
         newly_generated = []

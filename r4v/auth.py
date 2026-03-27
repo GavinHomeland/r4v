@@ -45,8 +45,12 @@ def get_youtube_service(token_file: Path | None = None, account_hint: str = "") 
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+            except Exception as _refresh_err:
+                print(f"[auth] Token refresh failed ({_refresh_err}) — re-authenticating via browser")
+                creds = None  # fall through to browser flow below
+        if not creds or not creds.valid:
             if not CLIENT_SECRET_FILE.exists():
                 raise FileNotFoundError(
                     f"OAuth credentials not found at {CLIENT_SECRET_FILE}\n"

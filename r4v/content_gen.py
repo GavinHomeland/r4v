@@ -15,13 +15,37 @@ _client: genai.Client | None = None
 
 _PERSONALITIES_PATH = Path(__file__).parent.parent / "config" / "personalities.json"
 
+# ── Personalities cache ───────────────────────────────────────────────────────
+# Loaded once per process; invalidated when the file's mtime changes.
+_personalities_cache: dict = {}
+_personalities_mtime: float = 0.0
+
+# System-prompt cache (depends on personalities)
+_system_prompt_cache: str = ""
+_system_prompt_mtime: float = 0.0
+
+# Weather cache (per location, per process session)
+_weather_cache: dict[str, str] = {}
+
+
+def _load_personalities() -> dict:
+    """Return personalities.json as a dict, reloading only when the file changes."""
+    global _personalities_cache, _personalities_mtime
+    try:
+        mtime = _PERSONALITIES_PATH.stat().st_mtime
+        if mtime != _personalities_mtime:
+            _personalities_cache = json.loads(_PERSONALITIES_PATH.read_text(encoding="utf-8"))
+            _personalities_mtime = mtime
+    except Exception:
+        pass
+    return _personalities_cache
+
 
 def _load_jt_profile() -> str:
-    """Load JT's personality profile from config/personalities.json."""
-    try:
-        data = json.loads(_PERSONALITIES_PATH.read_text(encoding="utf-8"))
-        jt = data.get("jt", {})
-    except Exception:
+    """Build JT's personality profile string from the cached personalities data."""
+    data = _load_personalities()
+    jt = data.get("jt", {})
+    if not jt:
         return ""
 
     lines = [
@@ -82,11 +106,10 @@ def _load_jt_profile() -> str:
 
 
 def _load_gavin_profile() -> str:
-    """Load Gavin's personality profile from config/personalities.json."""
-    try:
-        data = json.loads(_PERSONALITIES_PATH.read_text(encoding="utf-8"))
-        gavin = data.get("gavin", {})
-    except Exception:
+    """Build Gavin's personality profile string from the cached personalities data."""
+    data = _load_personalities()
+    gavin = data.get("gavin", {})
+    if not gavin:
         return ""
 
     priorities = gavin.get("editorial_priorities", [])
@@ -123,12 +146,9 @@ def _get_client() -> genai.Client:
 
 
 def _load_known_family() -> str:
-    """Load known family members so Gemini can address them by name."""
-    try:
-        data = json.loads(_PERSONALITIES_PATH.read_text(encoding="utf-8"))
-        family = data.get("known_family", {})
-    except Exception:
-        return ""
+    """Build known-family string from the cached personalities data."""
+    data = _load_personalities()
+    family = data.get("known_family", {})
     if not family:
         return ""
     lines = ["KNOWN FAMILY IN THE COMMENTS (address by name, not generically):"]
@@ -138,10 +158,19 @@ def _load_known_family() -> str:
 
 
 def _build_system_prompt() -> str:
+    """Return the Gemini system prompt, rebuilding only when personalities.json changes."""
+    global _system_prompt_cache, _system_prompt_mtime
+    try:
+        mtime = _PERSONALITIES_PATH.stat().st_mtime
+    except Exception:
+        mtime = 0.0
+    if _system_prompt_cache and mtime == _system_prompt_mtime:
+        return _system_prompt_cache
+
     jt_profile = _load_jt_profile()
     gavin_profile = _load_gavin_profile()
     family_note = _load_known_family()
-    return (
+    _system_prompt_cache = (
         "You are the content engine for the Roll4Veterans (@roll4veterans) YouTube channel.\n\n"
         "=== JT TRACY — channel owner, use for title/description/comment_jt ===\n"
         "{jt_profile}\n\n"
@@ -155,33 +184,27 @@ def _build_system_prompt() -> str:
         gavin_profile=gavin_profile or "Gavin — channel manager, warm and goofy.",
         family_note=family_note,
     )
+    _system_prompt_mtime = mtime
+    return _system_prompt_cache
 
 
 def _pick_jt_opener() -> str:
-    """Pick a random JT comment opener from personalities.json."""
-    try:
-        data = json.loads(_PERSONALITIES_PATH.read_text(encoding="utf-8"))
-        variants = data.get("jt", {}).get("comment_opener_variants", [])
-        if variants:
-            return random.choice(variants)
-    except Exception:
-        pass
-    return "Man, I tell you what —"
+    """Pick a random JT comment opener from the cached personalities data."""
+    data = _load_personalities()
+    variants = data.get("jt", {}).get("comment_opener_variants", [])
+    return random.choice(variants) if variants else "Man, I tell you what —"
 
 
 def _pick_gavin_hack() -> str:
     """Pre-select a random lead_in + hack pair 25% of the time; else return ''."""
     if random.random() > 0.25:
         return ""
-    try:
-        data = json.loads(_PERSONALITIES_PATH.read_text(encoding="utf-8"))
-        gavin = data.get("gavin", {})
-        lead_ins = gavin.get("conversational_lead_ins", [])
-        hacks = gavin.get("life_hack_pool", [])
-        if lead_ins and hacks:
-            return f"{random.choice(lead_ins)} {random.choice(hacks)}"
-    except Exception:
-        pass
+    data = _load_personalities()
+    gavin = data.get("gavin", {})
+    lead_ins = gavin.get("conversational_lead_ins", [])
+    hacks = gavin.get("life_hack_pool", [])
+    if lead_ins and hacks:
+        return f"{random.choice(lead_ins)} {random.choice(hacks)}"
     return ""
 
 
@@ -192,7 +215,6 @@ def _extract_transcript_opening(transcript_text: str) -> str:
     first sentence-ending punctuation or ~120 chars — whichever comes first.
     Returns empty string if the transcript is blank or too short to be useful.
     """
-    import re as _re
     text = (transcript_text or "").strip()
     if not text:
         return ""
@@ -200,27 +222,31 @@ def _extract_transcript_opening(transcript_text: str) -> str:
     lines = [l for l in text.splitlines() if not l.strip().startswith(">>")]
     text = " ".join(lines).strip()
     # Collapse whitespace
-    text = _re.sub(r"\s+", " ", text)
+    text = re.sub(r"\s+", " ", text)
     # Find first sentence boundary
-    m = _re.search(r"[.!?]", text[:200])
+    m = re.search(r"[.!?]", text[:200])
     sentence = text[:m.start() + 1] if m else text[:120]
     # Strip trailing filler that makes bad openers ("So, " / "Uh, " at the very start)
-    sentence = _re.sub(r"^(So[,.]?\s+|Uh[,.]?\s+|Um[,.]?\s+|And\s+|Well[,.]?\s+)", "", sentence, flags=_re.I)
+    sentence = re.sub(r"^(So[,.]?\s+|Uh[,.]?\s+|Um[,.]?\s+|And\s+|Well[,.]?\s+)", "", sentence, flags=re.I)
     return sentence.strip()
 
 
 def _fetch_weather(location: str) -> str:
-    """Fetch a one-line weather summary from wttr.in. Returns '' on any failure."""
+    """Fetch a one-line weather summary from wttr.in, cached per session. Returns '' on failure."""
     if not location:
         return ""
+    if location in _weather_cache:
+        return _weather_cache[location]
     try:
         q = quote_plus(location)
         url = f"https://wttr.in/{q}?format=3"
         req = urllib.request.Request(url, headers={"User-Agent": "curl/7.0"})
         with urllib.request.urlopen(req, timeout=4) as resp:
-            return resp.read().decode("utf-8", errors="ignore").strip()
+            result = resp.read().decode("utf-8", errors="ignore").strip()
     except Exception:
-        return ""
+        result = ""
+    _weather_cache[location] = result
+    return result
 
 
 def _guess_jt_location(existing_title: str, existing_description: str, transcript_text: str) -> str:
@@ -462,7 +488,7 @@ def generate_metadata(
     try:
         generated = json.loads(raw)
     except json.JSONDecodeError as e:
-        raise ValueError(f"Gemini returned invalid JSON for {video_id}: {e}\nRaw: {raw}")
+        raise ValueError(f"Gemini returned invalid JSON for {video_id}: {e}\nRaw: {raw}") from e
 
     base_desc = generated.get("description", "")
     hashtags = generated.get("hashtags", "")

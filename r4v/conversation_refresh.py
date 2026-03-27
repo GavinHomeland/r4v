@@ -17,9 +17,11 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from googleapiclient.errors import HttpError
 from config.settings import (
-    APPLIED_DIR, GENERATED_DIR, GEMINI_MODEL, GEMINI_API_KEY,
+    APPLIED_DIR, GENERATED_DIR, GEMINI_MODEL, GEMINI_API_KEY, QUOTA_VIDEOS_LIST,
 )
+from r4v import quota_tracker
 from r4v.storage import load_json
 
 # YouTube channel handle for each account (used to identify last commenter)
@@ -63,10 +65,6 @@ def fetch_video_comments(service, video_id: str, max_results: int = 10) -> list[
     Returns a list of dicts: [{author, text, published}] newest-first.
     Returns [] if comments are disabled or an error occurs.
     """
-    from googleapiclient.errors import HttpError
-    from r4v import quota_tracker
-    from config.settings import QUOTA_VIDEOS_LIST
-
     try:
         quota_tracker.check_quota(QUOTA_VIDEOS_LIST)
         resp = service.commentThreads().list(
@@ -123,9 +121,8 @@ def generate_refresh_comment(
     if not GEMINI_API_KEY:
         return ""
 
-    from google import genai
     from google.genai import types
-    from r4v.content_gen import _build_system_prompt
+    from r4v.content_gen import _get_client, _build_system_prompt
 
     # Pull video title if available
     meta = load_json(GENERATED_DIR / f"{video_id}_metadata.json") or {}
@@ -180,8 +177,7 @@ def generate_refresh_comment(
         )
 
     try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        response = client.models.generate_content(
+        response = _get_client().models.generate_content(
             model=GEMINI_MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(
