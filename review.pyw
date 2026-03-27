@@ -2532,7 +2532,7 @@ class R4VReviewApp:
         )
 
     def _push_schedule_dialog(self, approved_ids: list[str]):
-        """Modal dialog: push now or schedule over 21.3h.
+        """Modal dialog: push now or schedule with 4h between releases.
 
         Returns {} for push-now, {video_id: RFC3339_utc_str, ...} for schedule,
         or None if cancelled.
@@ -2598,7 +2598,7 @@ class R4VReviewApp:
                 preview_txt.config(state="disabled")
                 return
 
-            interval = timedelta(minutes=21*60+18) / n if n > 1 else timedelta(0)
+            interval = timedelta(hours=4) if n > 1 else timedelta(0)
             total_mins = int(interval.total_seconds() / 60)
             if total_mins >= 60:
                 h, m = divmod(total_mins, 60)
@@ -2628,7 +2628,7 @@ class R4VReviewApp:
             win.update_idletasks()
 
         for val, lbl in [("now",      "Push now — make all Public immediately"),
-                          ("schedule", "Schedule over 21.3 hours")]:
+                          ("schedule", "Schedule — 4 hours between releases")]:
             tk.Radiobutton(modes, text=lbl, variable=mode_var, value=val,
                            bg=CLR_BG, fg=CLR_TEXT, selectcolor=CLR_BG,
                            activebackground=CLR_BG, activeforeground=CLR_TEXT,
@@ -2657,7 +2657,7 @@ class R4VReviewApp:
                                      "Enter start time as YYYY-MM-DD HH:MM", parent=win)
                 return
             utc_start = local_dt.astimezone(timezone.utc)
-            interval = timedelta(minutes=21*60+18) / n if n > 1 else timedelta(0)
+            interval = timedelta(hours=4) if n > 1 else timedelta(0)
             smap = {}
             for i, vid in enumerate(approved_ids):
                 slot = utc_start + interval * i
