@@ -2795,10 +2795,14 @@ class R4VReviewApp:
                 if missing:
                     parts.append(f"{len(missing)} not found: {missing}")
                 summary = " · ".join(parts)
-                status_var.set(f"✓ {summary}")
-                status_lbl.config(fg=CLR_APPROVE if not missing else CLR_MUTED)
                 self._proc_status_var.set(f"Add Video: {summary}")
-                txt.delete("1.0", "end")
+                if not missing:
+                    win.destroy()
+                else:
+                    status_var.set(f"✓ {summary}")
+                    status_lbl.config(fg=CLR_MUTED)
+                    txt.delete("1.0", "end")
+                    txt.insert("1.0", "\n" * 9)
             except Exception as exc:
                 msg = str(exc)
                 if "invalid_grant" in msg or "Token has been expired" in msg:
