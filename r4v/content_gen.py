@@ -117,11 +117,12 @@ def _load_gavin_profile() -> str:
     lines = [
         "ABOUT GAVIN (JT's brother — writes comment_gavin ONLY, not descriptions):",
         f"  {gavin.get('relationship_to_jt', '')}",
+        "  His YouTube handle is @erictracy5584 (birth name), but he goes by GAVIN — NEVER call him Eric.",
         "",
         "GAVIN'S COMMENT RULES:",
         "  - No greeting, no opener — just launch straight into the reply",
         "  - 1-2 sentences responding directly to JT's specific words in comment_jt — reference them explicitly",
-        "  - Warm, slightly goofy tone; may briefly mention the Kansas farm (pigs, brassicas, guinea fowl)",
+        "  - Warm, slightly goofy tone; may briefly mention his farm at an undisclosed location in Kansas",
         "  - Every 3rd or 4th comment: append a non-sequitur 'Real Life Hack' using one lead-in + one hack",
         "  - If JT's comment contains a question, answer it",
         "  - NEVER reply to a comment posted by the same account",
@@ -174,7 +175,7 @@ def _build_system_prompt() -> str:
         "You are the content engine for the Roll4Veterans (@roll4veterans) YouTube channel.\n\n"
         "=== JT TRACY — channel owner, use for title/description/comment_jt ===\n"
         "{jt_profile}\n\n"
-        "=== GAVIN HOMELAND — channel manager, use ONLY for comment_gavin ===\n"
+        "=== GAVIN GREY — channel manager, use ONLY for comment_gavin ===\n"
         "{gavin_profile}\n\n"
         "{family_note}\n\n"
         "Team RWB (teamrwb.org) connects veterans through physical and social activity. "
@@ -193,6 +194,73 @@ def _pick_jt_opener() -> str:
     data = _load_personalities()
     variants = data.get("jt", {}).get("comment_opener_variants", [])
     return random.choice(variants) if variants else "Man, I tell you what —"
+
+
+def _build_variation_directive() -> str:
+    """Return a per-call variation block injected into the user prompt.
+
+    Randomly subsets catchphrases, closers, and openers so Gemini doesn't
+    default to the same top-of-list items every generation. Also assigns a
+    random emotional register to vary the overall feel of each video's output.
+    """
+    data = _load_personalities()
+    jt = data.get("jt", {})
+
+    # Emotional register — rotates the overall feel of the writing
+    tones = [
+        "reflective — JT is processing what he just experienced, finding meaning in the small stuff",
+        "fired up — something genuinely got to him today, energy is high",
+        "light-hearted and self-deprecating — things went sideways but he's laughing about it",
+        "moved — a person or moment genuinely touched him and he's not hiding it",
+        "matter-of-fact and practical — focus on logistics, gear, route, what's coming next",
+        "curious and a little amazed — he keeps noticing things and can't stop talking about them",
+        "grateful and direct — short sentences, real thanks, no performance",
+        "storytelling mode — one thing happened, it was a whole thing, here's all of it",
+    ]
+    tone = random.choice(tones)
+
+    # Random subset of catchphrases (4 of N, shuffled) — forces different ones each time
+    all_phrases = jt.get("catchphrases", [])
+    featured_phrases = random.sample(all_phrases, min(4, len(all_phrases))) if all_phrases else []
+
+    # Random subset of closers (2 of N)
+    all_closers = (
+        [jt.get("signature_closer", "Roll for veterans.")] + jt.get("closer_variants", [])
+    )
+    featured_closers = random.sample(all_closers, min(2, len(all_closers))) if all_closers else []
+
+    # Random comment opener
+    all_openers = jt.get("comment_opener_variants", [])
+    featured_opener = random.choice(all_openers) if all_openers else ""
+
+    # Random Gavin opener
+    gavin = data.get("gavin", {})
+    gavin_openers = gavin.get("comment_opener_variants", [])
+    gavin_opener = random.choice(gavin_openers) if gavin_openers else "Hi, Brother"
+
+    lines = [
+        "VARIATION DIRECTIVE — apply this to every field generated right now:",
+        f"  Emotional register: {tone}",
+        "  Let this register shape the word choices, sentence rhythm, and what details get emphasized.",
+        "",
+        "  Catchphrases available THIS generation (pick at most one, only if it fits naturally — skip if it doesn't):",
+    ]
+    for p in featured_phrases:
+        lines.append(f'    "{p}"')
+    lines += [
+        "  (Ignore the full catchphrase list in the system prompt — use only the ones above.)",
+        "",
+        "  Closer options THIS generation (pick one that matches the register above):",
+    ]
+    for c in featured_closers:
+        lines.append(f'    "{c}"')
+    lines += [
+        "",
+        f'  comment_jt opener THIS generation: "{featured_opener}"',
+        f'  comment_gavin opener THIS generation: "{gavin_opener}"',
+        "  (Use these exact openers — do not substitute others from the system prompt.)",
+    ]
+    return "\n".join(lines)
 
 
 def _pick_gavin_hack() -> str:
@@ -274,7 +342,7 @@ def _build_local_color_hint(
     """Fetch weather for JT's location and Gavin's Kansas. Return an injection hint or ''."""
     jt_loc = _guess_jt_location(existing_title, existing_description, transcript_text)
     jt_weather = _fetch_weather(jt_loc) if jt_loc else ""
-    gavin_weather = _fetch_weather("Salina, Kansas")
+    gavin_weather = _fetch_weather("central Kansas")
 
     lines = []
     if jt_weather:
@@ -307,6 +375,7 @@ def build_prompt(
     ai_notes: str = "",
     gavin_hack: str = "",
     local_color: str = "",
+    variation_directive: str = "",
 ) -> str:
     """Build the user prompt string without calling the API. Used by the GUI prompt editor."""
     opening = _extract_transcript_opening(transcript_text)
@@ -322,6 +391,7 @@ def build_prompt(
         )
     else:
         hack_hint = "End after his 1-2 sentences. Do not add anything extra.\n"
+    variation_block = f"{variation_directive}\n\n" if variation_directive else ""
     return USER_PROMPT_TMPL.format(
         existing_title=existing_title or "(none)",
         existing_description=existing_description or "(none — JT hasn't written one yet)",
@@ -330,6 +400,7 @@ def build_prompt(
         transcript_opening_hint=opening_hint,
         gavin_hack_hint=hack_hint,
         local_color_hint=local_color,
+        variation_block=variation_block,
     )
 
 
@@ -350,7 +421,7 @@ that voice. If it contains lines starting with "[[" — treat those as explicit 
 you MUST follow for this video (e.g. a name spelling, a detail to include, a correction).
 A description can contain both: prose sections to model and "[[" lines to execute.
 
-{local_color_hint}{ai_notes_block}FULL TRANSCRIPT:
+{variation_block}{local_color_hint}{ai_notes_block}FULL TRANSCRIPT:
 {transcript_text}
 
 ---
@@ -379,7 +450,7 @@ Drop one relevant emoji naturally in the text (not at the start). 1-2 sentences 
 End with a question for viewers or an invitation to share. \
 JT speaks from experience — he does NOT ask himself what something was like. MUST NOT be empty.
 
-comment_gavin is WRITTEN BY GAVIN from his @erictracy5584 account. Gavin is JT's actual brother, watching from his farm in Kansas and replying to comment_jt. No greeting — just dive straight into 1-2 sentences reacting to JT's specific words. Warm, slightly goofy. If JT's comment contains a question, answer it. {gavin_hack_hint}NEVER reply to a comment by the same account. MUST NOT be empty.
+comment_gavin is WRITTEN BY GAVIN GREY from his @erictracy5584 account. His handle contains his birth name (Eric) but he goes by GAVIN — NEVER call him Eric. Gavin is JT's actual brother, watching from his farm in Kansas and replying to comment_jt. No greeting — just dive straight into 1-2 sentences reacting to JT's specific words. Warm, slightly goofy. If JT's comment contains a question, answer it. {gavin_hack_hint}NEVER reply to a comment by the same account. MUST NOT be empty.
 
 For locations: list every specific named place from the transcript (towns, businesses, parks, landmarks). Any place named in the transcript or description MUST appear in this list — do not omit it. Be granular: "Pelican Cove, Destin, FL" beats "Destin, FL". Use JT's route (Key West → Gulf Coast west → Los Angeles → Flagstaff) to disambiguate. If no specific places are named, return [].
 
@@ -390,7 +461,7 @@ Generate the following and respond ONLY with valid JSON (no markdown, no extra t
   "tags": ["15-20 YouTube tags", "mix of broad cycling/veteran tags and specific content tags"],
   "hashtags": "space-separated hashtags — always_include first, then 5-7 from evergreen pool, then content-specific. Aim for 12-16 total.",
   "comment_jt": "WRITTEN BY JT — JT was there, speaks from experience, invites audience to engage. Opener variant + emoji, blank line, 1-2 sentences. MUST NOT be empty.",
-  "comment_gavin": "WRITTEN BY GAVIN (JT's brother in Kansas) — Hi Brother/Hi Bro + emoji, blank line, 1-2 sentences reacting to comment_jt. MUST NOT be empty.",
+  "comment_gavin": "WRITTEN BY GAVIN (JT's brother in Kansas) — no greeting, just 1-2 sentences reacting to comment_jt, warm and goofy. MUST NOT be empty.",
   "locations": [
     {{"label": "Place name, City, State", "query": "plain text Google Maps search"}}
   ]
@@ -461,6 +532,7 @@ def generate_metadata(
         existing_description=existing_description,
         transcript_text=transcript_text,
     )
+    variation_directive = _build_variation_directive()
     prompt = prompt_override if prompt_override is not None else build_prompt(
         transcript_text=transcript_text,
         existing_title=existing_title,
@@ -468,6 +540,7 @@ def generate_metadata(
         ai_notes=ai_notes,
         gavin_hack=gavin_hack,
         local_color=local_color,
+        variation_directive=variation_directive,
     )
 
     print(f"[content_gen] Generating metadata for {video_id} ...")
@@ -518,6 +591,7 @@ def generate_metadata(
         "comment_gavin": comment_gavin,
         "comment_location": comment_location,
         "approved": existing_approved,
+        "ai_notes": ai_notes,  # persist notes so they survive regen
     }
     save_json(cache_path, result)
     return result
@@ -543,6 +617,7 @@ def generate_all(videos: list[dict], transcripts: dict, force: bool = False) -> 
                 continue
         else:
             print(f"[content_gen] {i}/{total} {vid}  \"{title_short}\"")
+        saved = load_json(GENERATED_DIR / f"{vid}_metadata.json") or {}
         results[vid] = generate_metadata(
             video_id=vid,
             transcript_text=t_data["text"],
@@ -550,5 +625,6 @@ def generate_all(videos: list[dict], transcripts: dict, force: bool = False) -> 
             existing_description=video.get("description", ""),
             transcript_urls=t_data.get("urls", []),
             force=force,
+            ai_notes=saved.get("ai_notes", ""),
         )
     return results

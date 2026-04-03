@@ -1343,7 +1343,7 @@ class R4VReviewApp:
         else:
             self._btn_next.config(state="normal",   fg=CLR_TEXT,  cursor="hand2")
 
-    def _open_pipeline_window(self, pull_all: bool = False):
+    def _open_pipeline_window(self, pull_all: bool = False, skip_discover: bool = False):
         """Open a dedicated progress window and run cli.py pipeline [--all]."""
         if self._proc_running:
             messagebox.showwarning("Busy", "Another process is already running.\nUse ↺ Reset (More ▼) if it is stuck.")
@@ -1371,7 +1371,9 @@ class R4VReviewApp:
         tk.Label(win, text=f"R4V Pipeline — {label.title()}",
                  bg=CLR_BG, fg=CLR_HEADER,
                  font=(FONT_FAMILY, 15, "bold")).pack(pady=(16, 2))
-        tk.Label(win, text="discover  ·  transcripts (cached)  ·  generate AI metadata",
+        steps_text = ("transcripts  ·  generate AI metadata" if skip_discover
+                      else "discover  ·  transcripts (cached)  ·  generate AI metadata")
+        tk.Label(win, text=steps_text,
                  bg=CLR_BG, fg=CLR_MUTED, font=(FONT_FAMILY, 11)).pack()
 
         log_frame = tk.Frame(win, bg=CLR_BG)
@@ -1410,6 +1412,8 @@ class R4VReviewApp:
             cmd = [python, "-u", str(PROJECT_ROOT / "cli.py"), "pipeline"]
             if pull_all:
                 cmd.append("--all")
+            if skip_discover:
+                cmd.append("--skip-discover")
             try:
                 proc = subprocess.Popen(
                     cmd, cwd=str(PROJECT_ROOT),
@@ -1552,6 +1556,14 @@ class R4VReviewApp:
             hdr, text=f"#{idx + 1}  {video_id}",
             bg=CLR_PANEL, fg=CLR_MUTED, font=(FONT_MONO, 11),
         ).pack(side="left", padx=(0, 12))
+
+        has_notes = bool(meta and meta.get("ai_notes", "").strip())
+        if has_notes:
+            dot = tk.Label(hdr, text="●", bg=CLR_PANEL, fg="#cc4444",
+                           font=(FONT_FAMILY, 11), cursor="hand2")
+            dot.pack(side="left", padx=(0, 4))
+            Tooltip(dot, "AI Notes active — click to edit")
+            dot.bind("<Button-1>", lambda e: self._edit_ai_notes_dialog())
 
         tk.Label(
             hdr, text=existing_title or video_id,
@@ -1802,7 +1814,7 @@ class R4VReviewApp:
             row.pack(fill="x")
             tk.Label(
                 row, text=f"  {label_text}",
-                bg=CLR_PANEL, fg=CLR_MUTED,
+                bg=CLR_PANEL, fg=fg_color,
                 font=(FONT_MONO, 11, "bold"), width=12, anchor="w",
             ).pack(side="left")
             lbl_txt = f"{tooltip_text} (editable)" if not is_locked else f"{tooltip_text} (locked)"
@@ -1878,7 +1890,12 @@ class R4VReviewApp:
     def _set_approval(self, video_id: str, approved):
         meta = self._metadata.get(video_id)
         if not meta:
-            return
+            if approved != "external":
+                return
+            # No generated metadata yet — create a minimal record so the
+            # "Done in Studio" mark can be saved and the card can advance.
+            meta = {"video_id": video_id}
+            self._metadata[video_id] = meta
 
         widgets = self._widgets.get(video_id, {})
         if widgets:
@@ -2180,7 +2197,8 @@ class R4VReviewApp:
         win.title(f"Notes for AI — {video_id}")
         win.configure(bg=CLR_BG)
         win.resizable(True, True)
-        win.geometry("620x280")
+        win.geometry("620x340")
+        win.minsize(400, 280)
         win.transient(self.root)
 
         tk.Label(win, text="Corrections / context for Gemini on next regen:",
@@ -2190,12 +2208,6 @@ class R4VReviewApp:
                  bg=CLR_BG, fg=CLR_MUTED, font=(FONT_FAMILY, 10, "italic")).pack(
                      anchor="w", padx=12, pady=(0, 6))
 
-        txt = tk.Text(win, bg="#1a1408", fg=CLR_TEXT, font=(FONT_MONO, 11),
-                      relief="flat", insertbackground=CLR_TEXT, wrap="word")
-        txt.pack(fill="both", expand=True, padx=12, pady=(0, 6))
-        txt.insert("1.0", meta.get("ai_notes", ""))
-        txt.focus_set()
-
         def _save(close=True):
             notes = txt.get("1.0", "end-1c").strip()
             meta["ai_notes"] = notes
@@ -2204,14 +2216,22 @@ class R4VReviewApp:
                 win.destroy()
 
         btn_frame = tk.Frame(win, bg=CLR_BG)
-        btn_frame.pack(pady=(0, 10))
+        btn_frame.pack(side="bottom", pady=(0, 10))
         tk.Button(btn_frame, text="Save & Close", command=lambda: _save(True),
                   bg=CLR_APPROVE, fg="#000000", font=(FONT_FAMILY, 11, "bold"),
                   padx=10).pack(side="left", padx=6)
         tk.Button(btn_frame, text="Cancel", command=win.destroy,
                   bg=CLR_BTN_BG, fg=CLR_TEXT, font=(FONT_FAMILY, 11),
                   padx=10).pack(side="left", padx=6)
+        txt = tk.Text(win, bg="#1a1408", fg=CLR_TEXT, font=(FONT_MONO, 11),
+                      relief="flat", insertbackground=CLR_TEXT, wrap="word")
+        txt.pack(fill="both", expand=True, padx=12, pady=(0, 6))
+        txt.insert("1.0", meta.get("ai_notes", ""))
+        txt.focus_set()
+
         win.bind("<Escape>", lambda _: win.destroy())
+        win.bind("<Control-Return>", lambda _: _save(True))
+        win.grab_set()
 
     def _edit_tags_hashtags_dialog(self):
         """Popup to edit Tags and Hashtags for the current video."""
@@ -2569,6 +2589,9 @@ class R4VReviewApp:
                           + timedelta(hours=1))
         start_var = tk.StringVar(value=_default_start.strftime("%Y-%m-%d %H:%M"))
 
+        _saved_iv = str((load_json(UI_PREFS_JSON) or {}).get("push_interval_hours", 4))
+        interval_var = tk.StringVar(value=_saved_iv)
+
         sf_top = tk.Frame(sched_frame, bg=CLR_BG)
         sf_top.pack(fill="x", pady=(6, 2))
         tk.Label(sf_top, text="Start (local time):", bg=CLR_BG, fg=CLR_MUTED,
@@ -2577,6 +2600,12 @@ class R4VReviewApp:
                                bg=CLR_PANEL, fg=CLR_TEXT, insertbackground=CLR_TEXT,
                                font=(FONT_MONO, 11), relief="flat")
         start_entry.pack(side="left", padx=(6, 0))
+        tk.Label(sf_top, text="  Interval (hours):", bg=CLR_BG, fg=CLR_MUTED,
+                 font=(FONT_FAMILY, 11)).pack(side="left")
+        interval_entry = tk.Entry(sf_top, textvariable=interval_var, width=5,
+                                  bg=CLR_PANEL, fg=CLR_TEXT, insertbackground=CLR_TEXT,
+                                  font=(FONT_MONO, 11), relief="flat")
+        interval_entry.pack(side="left", padx=(6, 0))
         interval_lbl = tk.Label(sf_top, text="", bg=CLR_BG, fg=CLR_MUTED,
                                 font=(FONT_FAMILY, 10, "italic"))
         interval_lbl.pack(side="left", padx=(12, 0))
@@ -2592,13 +2621,24 @@ class R4VReviewApp:
                 local_dt = (datetime.strptime(start_var.get().strip(), "%Y-%m-%d %H:%M")
                             .replace(tzinfo=local_tz))
             except ValueError:
-                interval_lbl.config(text="(invalid date)")
+                interval_lbl.config(text="(invalid date/interval)")
                 preview_txt.config(state="normal")
                 preview_txt.delete("1.0", "end")
                 preview_txt.config(state="disabled")
                 return
 
-            interval = timedelta(hours=4) if n > 1 else timedelta(0)
+            try:
+                iv_hours = float(interval_var.get().strip())
+                if iv_hours < 0:
+                    raise ValueError
+            except ValueError:
+                interval_lbl.config(text="(invalid interval)")
+                preview_txt.config(state="normal")
+                preview_txt.delete("1.0", "end")
+                preview_txt.config(state="disabled")
+                return
+
+            interval = timedelta(hours=iv_hours) if n > 1 else timedelta(0)
             total_mins = int(interval.total_seconds() / 60)
             if total_mins >= 60:
                 h, m = divmod(total_mins, 60)
@@ -2618,6 +2658,7 @@ class R4VReviewApp:
             preview_txt.config(state="disabled")
 
         start_var.trace_add("write", _update_preview)
+        interval_var.trace_add("write", _update_preview)
 
         def _toggle():
             if mode_var.get() == "schedule":
@@ -2628,7 +2669,7 @@ class R4VReviewApp:
             win.update_idletasks()
 
         for val, lbl in [("now",      "Push now — make all Public immediately"),
-                          ("schedule", "Schedule — 4 hours between releases")]:
+                          ("schedule", "Schedule — stagger releases")]:
             tk.Radiobutton(modes, text=lbl, variable=mode_var, value=val,
                            bg=CLR_BG, fg=CLR_TEXT, selectcolor=CLR_BG,
                            activebackground=CLR_BG, activeforeground=CLR_TEXT,
@@ -2656,8 +2697,19 @@ class R4VReviewApp:
                 messagebox.showerror("Invalid date",
                                      "Enter start time as YYYY-MM-DD HH:MM", parent=win)
                 return
+            try:
+                iv_hours = float(interval_var.get().strip())
+                if iv_hours < 0:
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror("Invalid interval",
+                                     "Enter a positive number of hours (e.g. 2 or 1.5)", parent=win)
+                return
+            prefs = load_json(UI_PREFS_JSON) or {}
+            prefs["push_interval_hours"] = iv_hours
+            save_json(UI_PREFS_JSON, prefs)
             utc_start = local_dt.astimezone(timezone.utc)
-            interval = timedelta(hours=4) if n > 1 else timedelta(0)
+            interval = timedelta(hours=iv_hours) if n > 1 else timedelta(0)
             smap = {}
             for i, vid in enumerate(approved_ids):
                 slot = utc_start + interval * i
@@ -2688,11 +2740,11 @@ class R4VReviewApp:
         win.title("Add Video(s) by URL")
         win.configure(bg=CLR_BG)
         win.resizable(True, True)
-        win.geometry("560x300")
+        win.geometry("560x375")
         win.update_idletasks()
         x = (win.winfo_screenwidth() - 560) // 2
-        y = (win.winfo_screenheight() - 300) // 2
-        win.geometry(f"560x300+{x}+{y}")
+        y = (win.winfo_screenheight() - 375) // 2
+        win.geometry(f"560x375+{x}+{y}")
         win.grab_set()
 
         tk.Label(win, text="Paste YouTube URLs or video IDs — one per line:",
@@ -2798,7 +2850,7 @@ class R4VReviewApp:
                 self._proc_status_var.set(f"Add Video: {summary}")
                 if not missing:
                     win.destroy()
-                    self._open_pipeline_window()
+                    self._open_pipeline_window(skip_discover=True)
                 else:
                     status_var.set(f"✓ {summary}")
                     status_lbl.config(fg=CLR_MUTED)

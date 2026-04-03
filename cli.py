@@ -530,7 +530,9 @@ def check(force):
 @click.option("--force", is_flag=True, help="Force re-fetch and re-generate")
 @click.option("--all", "process_all", is_flag=True,
               help="Process ALL videos, including already Approved/Done-in-Studio ones")
-def pipeline(force, process_all):
+@click.option("--skip-discover", is_flag=True,
+              help="Skip discover + descriptions steps (use when videos are already registered)")
+def pipeline(force, process_all, skip_discover):
     """Run full pipeline: discover → descriptions → transcripts → generate.
 
     By default skips videos already marked Approved or Done in Studio,
@@ -543,15 +545,21 @@ def pipeline(force, process_all):
     from r4v.storage import load_json
     from config.settings import CHANNEL_URL
 
-    click.echo("[1/4] Discovering videos...")
-    videos = discover_videos(CHANNEL_URL, force=True)  # always fetch fresh to catch new uploads
-    # Also discover unlisted videos via YouTube API (yt-dlp only sees the public channel page)
-    try:
-        from r4v.auth import get_youtube_service as _get_svc
-        from r4v.channel import discover_unlisted_via_api as _disc_unl
-        videos = _disc_unl(_get_svc())
-    except Exception as _e:
-        click.echo(f"  ! Unlisted discovery skipped: {_e}")
+    if skip_discover:
+        click.echo("[1/4] Skipping discovery (videos already registered).")
+        from r4v.storage import load_json as _lj
+        from config.settings import VIDEOS_JSON as _VJ
+        videos = _lj(_VJ) or []
+    else:
+        click.echo("[1/4] Discovering videos...")
+        videos = discover_videos(CHANNEL_URL, force=True)  # always fetch fresh to catch new uploads
+        # Also discover unlisted videos via YouTube API (yt-dlp only sees the public channel page)
+        try:
+            from r4v.auth import get_youtube_service as _get_svc
+            from r4v.channel import discover_unlisted_via_api as _disc_unl
+            videos = _disc_unl(_get_svc())
+        except Exception as _e:
+            click.echo(f"  ! Unlisted discovery skipped: {_e}")
 
     done = set() if process_all else _done_ids()
     active = [v for v in videos if v["id"] not in done]
@@ -562,8 +570,11 @@ def pipeline(force, process_all):
         click.echo("All videos are already completed. Use --all to reprocess.")
         return
 
-    click.echo(f"\n[2/4] Fetching descriptions for {len(active)} active video(s)...")
-    fetch_descriptions(active)
+    if skip_discover:
+        click.echo(f"\n[2/4] Skipping descriptions (videos already registered).")
+    else:
+        click.echo(f"\n[2/4] Fetching descriptions for {len(active)} active video(s)...")
+        fetch_descriptions(active)
 
     click.echo(f"\n[3/4] Fetching transcripts for {len(active)} active video(s)...")
     transcripts_map = fetch_all_transcripts([v["id"] for v in active], force=force)
