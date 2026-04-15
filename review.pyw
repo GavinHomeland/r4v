@@ -27,11 +27,13 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 # ── Data paths (mirror config/settings.py without importing heavy deps yet) ───
 DATA_DIR = PROJECT_ROOT / "data"
+TRANSCRIPTS_DIR  = DATA_DIR / "transcripts"
 GENERATED_DIR = DATA_DIR / "generated"
 APPLIED_DIR = DATA_DIR / "applied"
 VIDEOS_JSON = DATA_DIR / "videos.json"
 CHECK_STATE_JSON = DATA_DIR / "check_state.json"
-UI_PREFS_JSON    = DATA_DIR / "ui_prefs.json"
+UI_PREFS_JSON        = DATA_DIR / "ui_prefs.json"
+GLOBAL_AI_NOTES_JSON = DATA_DIR / "global_ai_notes.json"
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 CLR_BG = "#0e0e1c"
@@ -101,6 +103,18 @@ def save_json(path: Path, data):
 def load_all_data() -> tuple[list[dict], dict[str, dict]]:
     """Return (videos_list, {video_id: metadata_dict})."""
     videos = load_json(VIDEOS_JSON) or []
+
+    # Correct stale availability: if a video was pushed through our system it's public,
+    # regardless of what videos.json says.  Saves back if anything changed.
+    dirty = False
+    for v in videos:
+        if v.get("availability") in ("unlisted", "private"):
+            if (APPLIED_DIR / f"{v['id']}_applied.json").exists():
+                v["availability"] = "public"
+                dirty = True
+    if dirty:
+        save_json(VIDEOS_JSON, videos)
+
     metadata: dict[str, dict] = {}
     if GENERATED_DIR.exists():
         for p in sorted(GENERATED_DIR.glob("*_metadata.json")):
@@ -489,6 +503,8 @@ class R4VReviewApp:
         self._load_data()
         self.root.after(600, self._check_new_activity)
         self.root.after(1200, self._check_conversation_refresh)
+        self.root.after(1800, self._check_personality_refresh)
+        self.root.after(3000, self._startup_queue_check)
 
     # ── UI construction ───────────────────────────────────────────────────────
 
@@ -601,11 +617,15 @@ class R4VReviewApp:
         )
         self._more_menu.add_command(
             label="Engage (like + comment)",
-            command=lambda: self._run_cli("Engage", ["cli.py", "engage"], None, False),
+            command=lambda: self._run_cli("Engage", ["cli.py", "engage"], None, True),
         )
         self._more_menu.add_command(
             label="\U0001f3ad Personalities \u2014 edit JT & Gavin voice profiles",
             command=self._edit_personalities,
+        )
+        self._more_menu.add_command(
+            label="\U0001f310 Global AI Notes \u2014 persistent instructions for every generation",
+            command=self._edit_global_ai_notes,
         )
         self._more_menu.add_command(
             label="\U0001f3f7 Tags & Hashtags \u2014 edit for this video",
@@ -633,7 +653,7 @@ class R4VReviewApp:
         self._more_menu.add_command(
             label="Transcripts (fetch missing captions)",
             command=lambda: self._run_cli("Transcripts", ["cli.py", "transcripts"],
-                                         None, False),
+                                         None, True),
         )
         self._more_menu.add_command(
             label="Find Unlisted (API scan)",
@@ -742,7 +762,7 @@ class R4VReviewApp:
             "Push \u2192 YouTube", self._push_approved, "#89b4fa",
             "Push all Approved cards to YouTube: updates title, description, tags,\n"
             "sets visibility to Public, and adds to the R4V playlist.\n"
-            "Engage (like + comment) runs automatically 4 seconds after a successful push.",
+            "To post likes and comments, use More \u25be \u203a Engage after pushing.",
             "Push Approved",
         )
         b_push.pack(side="right", padx=2)
@@ -987,6 +1007,57 @@ class R4VReviewApp:
         ).pack(side="left", padx=8)
 
         win.protocol("WM_DELETE_WINDOW", _dismiss)
+
+    # ── Personality Refresh notification ─────────────────────────────────────
+
+    def _check_personality_refresh(self):
+        """Show a notification if the weekly remote agent updated personalities.json."""
+        flag_path  = DATA_DIR / "personality_refresh_flag.json"
+        seen_path  = DATA_DIR / "personality_refresh_seen.json"
+        if not flag_path.exists():
+            return
+        flag = load_json(flag_path) or {}
+        seen = load_json(seen_path) or {}
+        if flag.get("refreshed_at") == seen.get("refreshed_at"):
+            return  # already acknowledged
+
+        # Mark seen immediately
+        save_json(seen_path, {"refreshed_at": flag.get("refreshed_at", "")})
+
+        win = tk.Toplevel(self.root)
+        win.title("Personalities Updated")
+        win.configure(bg=CLR_BG)
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.grab_set()
+        self.root.update_idletasks()
+        cx = self.root.winfo_x() + self.root.winfo_width()  // 2 - 220
+        cy = self.root.winfo_y() + 160
+        win.geometry(f"440x180+{max(0,cx)}+{max(0,cy)}")
+
+        tk.Label(win, text="Personality Profiles Updated",
+                 bg=CLR_BG, fg=CLR_APPROVE,
+                 font=(FONT_FAMILY, 14, "bold")).pack(anchor="w", padx=24, pady=(18, 2))
+        tk.Label(win,
+                 text="The weekly agent refreshed JT's catchphrases and quotes.\n"
+                      "Reload now to use the new profiles for generation.",
+                 bg=CLR_BG, fg=CLR_TEXT, font=(FONT_FAMILY, 11),
+                 justify="left").pack(anchor="w", padx=24, pady=(4, 12))
+
+        btn_row = tk.Frame(win, bg=CLR_BG)
+        btn_row.pack(pady=(0, 16))
+
+        def _reload():
+            win.destroy()
+            self._load_data()
+
+        tk.Button(btn_row, text="Reload Now", bg=CLR_APPROVE, fg="#000000",
+                  font=(FONT_FAMILY, 12, "bold"), relief="flat",
+                  padx=16, pady=5, cursor="hand2", command=_reload).pack(side="left", padx=8)
+        tk.Button(btn_row, text="Later", bg=CLR_BTN_BG, fg=CLR_TEXT,
+                  font=(FONT_FAMILY, 12), relief="flat",
+                  padx=16, pady=5, cursor="hand2", command=win.destroy).pack(side="left", padx=8)
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
 
     # ── Conversation Refresh ──────────────────────────────────────────────────
 
@@ -1343,7 +1414,7 @@ class R4VReviewApp:
         else:
             self._btn_next.config(state="normal",   fg=CLR_TEXT,  cursor="hand2")
 
-    def _open_pipeline_window(self, pull_all: bool = False, skip_discover: bool = False):
+    def _open_pipeline_window(self, pull_all: bool = False, skip_discover: bool = False, video_ids: list[str] | None = None):
         """Open a dedicated progress window and run cli.py pipeline [--all]."""
         if self._proc_running:
             messagebox.showwarning("Busy", "Another process is already running.\nUse ↺ Reset (More ▼) if it is stuck.")
@@ -1354,7 +1425,12 @@ class R4VReviewApp:
         for b in (v for v in self._proc_buttons.values() if v is not None):
             b.config(state="disabled")
         self._proc_progbar.start(12)
-        label = "ALL videos" if pull_all else "new/pending only"
+        if video_ids:
+            label = f"{len(video_ids)} video(s)"
+        elif pull_all:
+            label = "ALL videos"
+        else:
+            label = "new/pending only"
         self._proc_status_var.set(f"Pipeline: {label}…")
 
         # Build progress window
@@ -1371,7 +1447,7 @@ class R4VReviewApp:
         tk.Label(win, text=f"R4V Pipeline — {label.title()}",
                  bg=CLR_BG, fg=CLR_HEADER,
                  font=(FONT_FAMILY, 15, "bold")).pack(pady=(16, 2))
-        steps_text = ("transcripts  ·  generate AI metadata" if skip_discover
+        steps_text = ("transcripts  ·  generate AI metadata" if (skip_discover or video_ids)
                       else "discover  ·  transcripts (cached)  ·  generate AI metadata")
         tk.Label(win, text=steps_text,
                  bg=CLR_BG, fg=CLR_MUTED, font=(FONT_FAMILY, 11)).pack()
@@ -1412,8 +1488,10 @@ class R4VReviewApp:
             cmd = [python, "-u", str(PROJECT_ROOT / "cli.py"), "pipeline"]
             if pull_all:
                 cmd.append("--all")
-            if skip_discover:
+            if skip_discover and not video_ids:
                 cmd.append("--skip-discover")
+            for vid in (video_ids or []):
+                cmd += ["--video-id", vid]
             try:
                 proc = subprocess.Popen(
                     cmd, cwd=str(PROJECT_ROOT),
@@ -1438,6 +1516,8 @@ class R4VReviewApp:
             self._proc_status_var.set(msg)
             if success:
                 self._load_data()
+            self._clean_pending_queue()
+            self._schedule_auto_check()  # start 30-min retry if videos still pending
             try:
                 close_btn.config(state="normal", text="Close")
                 win.protocol("WM_DELETE_WINDOW", win.destroy)
@@ -2233,6 +2313,64 @@ class R4VReviewApp:
         win.bind("<Control-Return>", lambda _: _save(True))
         win.grab_set()
 
+    def _edit_global_ai_notes(self):
+        """Popup to edit persistent global AI notes — applied to every generation."""
+        win = tk.Toplevel(self.root)
+        win.title("Global AI Notes")
+        win.configure(bg=CLR_BG)
+        win.resizable(True, True)
+        win.geometry("640x360")
+        win.minsize(400, 280)
+        win.transient(self.root)
+
+        tk.Label(win, text="Persistent instructions for Gemini — applied to every generation:",
+                 bg=CLR_BG, fg="#a08060", font=(FONT_FAMILY, 11)).pack(
+                     anchor="w", padx=12, pady=(10, 2))
+        tk.Label(win,
+                 text='One instruction per line. Stays active until you clear it.  '
+                      'Example: "Sean\'s name is spelled Sean, not Shawn"',
+                 bg=CLR_BG, fg=CLR_MUTED, font=(FONT_FAMILY, 10, "italic"), wraplength=610).pack(
+                     anchor="w", padx=12, pady=(0, 6))
+
+        current_data = load_json(GLOBAL_AI_NOTES_JSON) or {}
+        current_notes = (current_data.get("notes") or "").strip()
+
+        def _save(close=True):
+            notes = txt.get("1.0", "end-1c").strip()
+            save_json(GLOBAL_AI_NOTES_JSON, {"notes": notes})
+            if notes:
+                self._proc_status_var.set(f"Global AI notes saved ({len(notes.splitlines())} line(s))")
+            else:
+                self._proc_status_var.set("Global AI notes cleared.")
+            if close:
+                win.destroy()
+
+        def _clear():
+            txt.delete("1.0", "end")
+            _save(close=True)
+
+        btn_frame = tk.Frame(win, bg=CLR_BG)
+        btn_frame.pack(side="bottom", pady=(0, 10))
+        tk.Button(btn_frame, text="Save & Close", command=lambda: _save(True),
+                  bg=CLR_APPROVE, fg="#000000", font=(FONT_FAMILY, 11, "bold"),
+                  padx=10).pack(side="left", padx=6)
+        tk.Button(btn_frame, text="Clear All", command=_clear,
+                  bg=CLR_SKIP, fg="#000000", font=(FONT_FAMILY, 11),
+                  padx=10).pack(side="left", padx=6)
+        tk.Button(btn_frame, text="Cancel", command=win.destroy,
+                  bg=CLR_BTN_BG, fg=CLR_TEXT, font=(FONT_FAMILY, 11),
+                  padx=10).pack(side="left", padx=6)
+
+        txt = tk.Text(win, bg="#1a1408", fg=CLR_TEXT, font=(FONT_MONO, 11),
+                      relief="flat", insertbackground=CLR_TEXT, wrap="word")
+        txt.pack(fill="both", expand=True, padx=12, pady=(0, 6))
+        txt.insert("1.0", current_notes)
+        txt.focus_set()
+
+        win.bind("<Escape>", lambda _: win.destroy())
+        win.bind("<Control-Return>", lambda _: _save(True))
+        win.grab_set()
+
     def _edit_tags_hashtags_dialog(self):
         """Popup to edit Tags and Hashtags for the current video."""
         if not self._filtered_ids:
@@ -2499,6 +2637,24 @@ class R4VReviewApp:
                         meta["approved"] = "external"
                         meta.pop("publish_at", None)  # consumed — clean up
                         save_json(GENERATED_DIR / f"{vid}_metadata.json", meta)
+
+                # Update videos.json so the filter reflects current YouTube state
+                _vids = load_json(VIDEOS_JSON) or []
+                _vid_set = set(newly_applied)
+                for _v in _vids:
+                    if _v.get("id") in _vid_set:
+                        _v["availability"] = "public"
+                if _vid_set:
+                    save_json(VIDEOS_JSON, _vids)
+                    self._videos = _vids  # keep in-memory copy in sync
+
+                # Remove pushed IDs from the pending Add Video list
+                _p = load_json(UI_PREFS_JSON) or {}
+                _pending = _p.get("pending_video_ids", [])
+                if _pending:
+                    _p["pending_video_ids"] = [v for v in _pending if v not in _vid_set]
+                    save_json(UI_PREFS_JSON, _p)
+
                 self._load_data()
                 count = len(newly_applied)
 
@@ -2511,28 +2667,31 @@ class R4VReviewApp:
                     return  # no auto-engage for scheduled releases
 
                 self._proc_status_var.set(
-                    f"\u2713 Pushed {count}/{len(pushed_ids)} video(s) \u2014 Engage starts in 4 seconds..."
+                    f"\u2713 Pushed {count}/{len(pushed_ids)} video(s) \u2014 use More \u25be \u203a Engage to post comments."
                 )
 
-                def _auto_engage():
-                    from r4v.storage import load_json as _le
-                    eng_log = _le(APPLIED_DIR / "engagement.json") or {}
-                    unengaged = [
-                        vid for vid in newly_applied
-                        if not (eng_log.get(vid, {}).get("liked")
-                                and eng_log.get(vid, {}).get("commented"))
-                    ]
-                    if unengaged:
-                        engage_args = ["cli.py", "engage"]
-                        for vid in unengaged:
-                            engage_args += ["--video-id", vid]
-                        self._run_cli("Engage", engage_args, None, auto_reload=False)
-                    else:
-                        self._proc_status_var.set(
-                            f"\u2713 Pushed {count}/{len(pushed_ids)} \u2014 all videos already engaged."
-                        )
-
-                self.root.after(4000, _auto_engage)
+                # Auto-engage disabled — re-enable by uncommenting below
+                # self._proc_status_var.set(
+                #     f"\u2713 Pushed {count}/{len(pushed_ids)} video(s) \u2014 Engage starts in 4 seconds..."
+                # )
+                # def _auto_engage():
+                #     from r4v.storage import load_json as _le
+                #     eng_log = _le(APPLIED_DIR / "engagement.json") or {}
+                #     unengaged = [
+                #         vid for vid in newly_applied
+                #         if not (eng_log.get(vid, {}).get("liked")
+                #                 and eng_log.get(vid, {}).get("commented"))
+                #     ]
+                #     if unengaged:
+                #         engage_args = ["cli.py", "engage"]
+                #         for vid in unengaged:
+                #             engage_args += ["--video-id", vid]
+                #         self._run_cli("Engage", engage_args, None, auto_reload=False)
+                #     else:
+                #         self._proc_status_var.set(
+                #             f"\u2713 Pushed {count}/{len(pushed_ids)} \u2014 all videos already engaged."
+                #         )
+                # self.root.after(4000, _auto_engage)
             else:
                 messagebox.showerror(
                     "Push failed",
@@ -2753,7 +2912,15 @@ class R4VReviewApp:
         txt = tk.Text(win, bg=CLR_BTN_BG, fg=CLR_TEXT, insertbackground=CLR_TEXT,
                       font=("Segoe UI", 11), height=10, relief="flat", wrap="word")
         txt.pack(padx=16, fill="both", expand=True)
-        txt.insert("1.0", "\n" * 9)  # pre-fill with blank lines — paste URLs without pressing Enter
+
+        # Restore pending URLs saved from the last session
+        _prefs = load_json(UI_PREFS_JSON) or {}
+        _pending_ids = _prefs.get("pending_video_ids", [])
+        if _pending_ids:
+            _restored = "\n".join(f"https://www.youtube.com/shorts/{vid}" for vid in _pending_ids)
+            txt.insert("1.0", _restored + "\n" + "\n" * max(0, 9 - len(_pending_ids)))
+        else:
+            txt.insert("1.0", "\n" * 9)  # pre-fill with blank lines — paste URLs without pressing Enter
         txt.mark_set("insert", "1.0")
         txt.focus_set()
 
@@ -2839,6 +3006,15 @@ class R4VReviewApp:
                 save_json(VIDEOS_JSON, videos)
                 self._load_data(skip_autosave=True)
 
+                # Persist pending IDs to ui_prefs — cleared only when pushed
+                _all_processed = added + updated
+                if _all_processed:
+                    _p = load_json(UI_PREFS_JSON) or {}
+                    _existing_pending = _p.get("pending_video_ids", [])
+                    _merged = list(dict.fromkeys(_existing_pending + _all_processed))
+                    _p["pending_video_ids"] = _merged
+                    save_json(UI_PREFS_JSON, _p)
+
                 parts = []
                 if added:
                     parts.append(f"{len(added)} added")
@@ -2850,7 +3026,7 @@ class R4VReviewApp:
                 self._proc_status_var.set(f"Add Video: {summary}")
                 if not missing:
                     win.destroy()
-                    self._open_pipeline_window(skip_discover=True)
+                    self._open_pipeline_window(video_ids=added or updated)
                 else:
                     status_var.set(f"✓ {summary}")
                     status_lbl.config(fg=CLR_MUTED)
@@ -2953,7 +3129,168 @@ class R4VReviewApp:
         self._proc_current_label = ""
         self._proc_auto_reload = False
         self._proc_on_done = None
+        self._auto_check_after_id = None
+        self._auto_check_fire_ms: int = 0  # epoch ms when next check fires
         self.root.after(100, self._poll_proc_q)
+
+    # ── Auto-check pending queue ──────────────────────────────────────────────
+
+    _AUTO_CHECK_INTERVAL_MS = 30 * 60 * 1000  # 30 minutes
+
+    def _get_unprocessed_pending(self) -> list[str]:
+        """Return pending video IDs that still need transcript or metadata."""
+        prefs = load_json(UI_PREFS_JSON) or {}
+        pending = prefs.get("pending_video_ids", [])
+        return [v for v in pending
+                if not (TRANSCRIPTS_DIR / f"{v}.json").exists()
+                or not (GENERATED_DIR / f"{v}_metadata.json").exists()]
+
+    def _startup_queue_check(self):
+        """On startup: clean stale pending IDs, then schedule auto-check if needed."""
+        self._clean_pending_queue()
+        self._schedule_auto_check()
+
+    def _clean_pending_queue(self):
+        """Remove from pending_video_ids any video that is fully processed or already pushed.
+
+        Runs on startup and after every pipeline/push so IDs don't get stuck.
+        """
+        prefs = load_json(UI_PREFS_JSON) or {}
+        pending = prefs.get("pending_video_ids", [])
+        if not pending:
+            return
+        kept = []
+        for vid in pending:
+            meta_path = GENERATED_DIR / f"{vid}_metadata.json"
+            meta = load_json(meta_path) if meta_path.exists() else None
+            # Drop if pushed (applied file exists) or fully processed with approved state
+            if (APPLIED_DIR / f"{vid}_applied.json").exists():
+                continue
+            if meta and meta.get("approved") == "external":
+                continue
+            kept.append(vid)
+        if kept != pending:
+            prefs["pending_video_ids"] = kept
+            save_json(UI_PREFS_JSON, prefs)
+
+    def _schedule_auto_check(self):
+        """Schedule next auto-check if there are still unprocessed pending videos."""
+        import time as _time
+        if self._auto_check_after_id:
+            return  # already scheduled
+        if not self._get_unprocessed_pending():
+            return
+        self._auto_check_fire_ms = int(_time.time() * 1000) + self._AUTO_CHECK_INTERVAL_MS
+        self._auto_check_after_id = self.root.after(
+            self._AUTO_CHECK_INTERVAL_MS, self._auto_check_pending
+        )
+        self._auto_check_countdown_tick()
+
+    def _auto_check_countdown_tick(self):
+        """Update status bar with countdown every 60 s while waiting."""
+        import time as _time
+        if not self._auto_check_after_id or self._proc_running:
+            return
+        remaining_ms = self._auto_check_fire_ms - int(_time.time() * 1000)
+        if remaining_ms <= 0:
+            return
+        remaining_min = max(1, round(remaining_ms / 60000))
+        self._proc_status_var.set(
+            f"Auto-check: next transcript retry in {remaining_min} min "
+            f"({len(self._get_unprocessed_pending())} video(s) pending)"
+        )
+        self.root.after(60_000, self._auto_check_countdown_tick)
+
+    def _auto_check_pending(self):
+        """Fire: run pipeline for any unprocessed pending videos, then reschedule if needed."""
+        self._auto_check_after_id = None
+        self._clean_pending_queue()
+        unprocessed = self._get_unprocessed_pending()
+        if not unprocessed:
+            return
+        if self._proc_running:
+            # Something else is running — back off and try again in 30 min
+            self._schedule_auto_check()
+            return
+        pipeline_args = ["cli.py", "pipeline", "--skip-discover"]
+        for vid in unprocessed:
+            pipeline_args += ["--video-id", vid]
+
+        attempted = set(unprocessed)
+
+        def _on_done(rc):
+            self._load_data()
+            self._clean_pending_queue()
+
+            # Work out what changed
+            now_unprocessed = set(self._get_unprocessed_pending())
+            newly_done = attempted - now_unprocessed
+            still_pending = attempted & now_unprocessed
+
+            lines = []
+            import datetime as _dt
+            ts = _dt.datetime.now().strftime("%H:%M")
+            lines.append(f"Auto-check completed at {ts}")
+            lines.append("")
+            if newly_done:
+                vids_list = self._videos if hasattr(self, "_videos") else []
+                title_map = {v["id"]: v.get("title", v["id"])[:50] for v in vids_list}
+                lines.append(f"✓ Processed ({len(newly_done)}):")
+                for vid in sorted(newly_done):
+                    lines.append(f"   {title_map.get(vid, vid)}")
+            if still_pending:
+                lines.append(f"⏳ Still waiting for captions ({len(still_pending)}):")
+                for vid in sorted(still_pending):
+                    lines.append(f"   {vid}")
+                lines.append("")
+                lines.append("Will retry in 30 minutes.")
+            if not newly_done and not still_pending:
+                lines.append("Nothing changed.")
+
+            self._show_auto_check_result("\n".join(lines))
+            self._schedule_auto_check()  # reschedule only if still needed
+
+        self._run_cli(
+            "Auto-check (transcripts)", pipeline_args, None,
+            auto_reload=False, on_done=_on_done,
+        )
+
+    def _show_auto_check_result(self, message: str):
+        """Non-modal result window that stays until the user dismisses it."""
+        # Close any previous result window
+        prev = getattr(self, "_auto_check_result_win", None)
+        if prev:
+            try:
+                prev.destroy()
+            except Exception:
+                pass
+
+        win = tk.Toplevel(self.root)
+        win.title("Auto-check Result")
+        win.configure(bg=CLR_BG)
+        win.resizable(True, True)
+        win.geometry("420x260")
+        win.update_idletasks()
+        # Position bottom-right of main window
+        mx = self.root.winfo_x() + self.root.winfo_width() - 440
+        my = self.root.winfo_y() + self.root.winfo_height() - 300
+        win.geometry(f"420x260+{max(0,mx)}+{max(0,my)}")
+        win.lift()
+        win.attributes("-topmost", True)
+        self._auto_check_result_win = win
+
+        txt = tk.Text(win, bg=CLR_PANEL, fg=CLR_TEXT, font=(FONT_MONO, 11),
+                      relief="flat", wrap="word", padx=12, pady=10, state="normal")
+        txt.insert("1.0", message)
+        txt.config(state="disabled")
+        txt.pack(fill="both", expand=True, padx=8, pady=(8, 4))
+
+        tk.Button(win, text="OK", command=win.destroy,
+                  bg=CLR_APPROVE, fg="#000000",
+                  font=(FONT_FAMILY, 11, "bold"), padx=20, pady=4,
+                  cursor="hand2").pack(pady=(0, 10))
+        win.bind("<Return>", lambda _: win.destroy())
+        win.bind("<Escape>", lambda _: win.destroy())
 
     def _run_cli(self, label: str, args: list, btn, auto_reload: bool = False, on_done=None):
         if self._proc_running:
@@ -3005,7 +3342,25 @@ class R4VReviewApp:
                 item = self._proc_q.get_nowait()
                 kind = item[0]
                 if kind == "line":
-                    self._proc_status_var.set(item[1][:180])
+                    line = item[1]
+                    # Detect OAuth token expiry in any subprocess output
+                    if any(s in line for s in ("invalid_grant", "Token has been expired",
+                                               "token has been expired", "oauth2", "re-authenticate")):
+                        self._proc_status_var.set(
+                            "⚠ OAuth token expired — run: python cli.py push  to re-authenticate"
+                        )
+                        messagebox.showwarning(
+                            "OAuth Token Expired",
+                            "A YouTube OAuth token has expired.\n\n"
+                            "To fix:\n"
+                            "  1. Open a terminal in W:\\r4v\n"
+                            "  2. Run:  python cli.py push\n"
+                            "  3. Complete the browser sign-in\n\n"
+                            "If it's Gavin's token (engage/comments), run:\n"
+                            "  python cli.py engage"
+                        )
+                    else:
+                        self._proc_status_var.set(line[:180])
                 elif kind == "field_done":
                     _tup = item[1]
                     _btn, _lbl, _pw, _fkind, _val, _err = _tup[:6]

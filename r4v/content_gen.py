@@ -8,7 +8,7 @@ from urllib.parse import quote_plus
 from google import genai
 from google.genai import types
 
-from config.settings import GEMINI_API_KEY, GEMINI_MODEL, GENERATED_DIR, FOOTER_TEMPLATE
+from config.settings import GEMINI_API_KEY, GEMINI_MODEL, GENERATED_DIR, FOOTER_TEMPLATE, GLOBAL_AI_NOTES_JSON
 from r4v.storage import load_json, save_json
 
 _client: genai.Client | None = None
@@ -173,13 +173,33 @@ def _build_system_prompt() -> str:
     family_note = _load_known_family()
     _system_prompt_cache = (
         "You are the content engine for the Roll4Veterans (@roll4veterans) YouTube channel.\n\n"
+
+        "=== PROJECT OVERVIEW ===\n"
+        "Roll4Veterans (R4V) is a 4,463-mile solo bicycle journey across America, ridden by JT Tracy "
+        "to raise awareness and support for veterans through Team Red, White & Blue (Team RWB). "
+        "Route: Key West, FL → Los Angeles, CA → Flagstaff, AZ. "
+        "Dates: February 27 – June 21, 2026. "
+        "Team RWB (teamrwb.org) connects veterans to their communities through physical and social activity. "
+        "R4V social: @roll4veterans on FB/IG/TT/YT. Website: r4v.songseekers.org. "
+        "Fundraising: gofund.me/fdff623ca (mission fund), zeffy.com (Team RWB donation).\n\n"
+
+        "=== NAMED PEOPLE & THINGS — get these right ===\n"
+        "- Sean 'Lancelot' Palmer: JT's support driver. Handles lodging, food, and logistics. "
+        "Shows up with Marcus (the truck) when JT needs resupply. JT calls him Lancelot.\n"
+        "- Herbie: JT's bike.\n"
+        "- Giselle: The cargo trailer JT tows behind the bike. Carries gear and Roll4Veterans flags.\n"
+        "- Marcus: JT's support truck (driven by Sean).\n"
+        "- Cleopatra: The trailer towed behind Marcus.\n"
+        "- Boogalie Bear (Boog): JT's stuffed bear mascot. Travels with him, gets introduced to the camera. "
+        "JT talks to Boog on camera: 'Hey, Boog. Say hi to the peeps.'\n"
+        "- Gavin Grey: JT's brother, channel manager. Based at 'an undisclosed location in Kansas'. "
+        "Does not ride — manages the YouTube channel remotely.\n\n"
+
         "=== JT TRACY — channel owner, use for title/description/comment_jt ===\n"
         "{jt_profile}\n\n"
         "=== GAVIN GREY — channel manager, use ONLY for comment_gavin ===\n"
         "{gavin_profile}\n\n"
-        "{family_note}\n\n"
-        "Team RWB (teamrwb.org) connects veterans through physical and social activity. "
-        "R4V social: @roll4veterans on FB/IG/TT/YT. Website: r4v.songseekers.org"
+        "{family_note}"
     ).format(
         jt_profile=jt_profile or "JT Tracy — veteran cyclist, R4V founder.",
         gavin_profile=gavin_profile or "Gavin — channel manager, warm and goofy.",
@@ -359,6 +379,20 @@ def _build_local_color_hint(
     )
 
 
+def _load_global_ai_notes() -> str:
+    """Return the persistent global AI notes, or empty string if none set."""
+    data = load_json(GLOBAL_AI_NOTES_JSON)
+    if not data:
+        return ""
+    return (data.get("notes") or "").strip()
+
+
+def _merge_ai_notes(global_notes: str, per_video_notes: str) -> str:
+    """Combine global notes (always active) with per-video notes."""
+    parts = [p.strip() for p in (global_notes, per_video_notes) if (p or "").strip()]
+    return "\n".join(parts)
+
+
 def _format_ai_notes(ai_notes: str) -> str:
     text = (ai_notes or "").strip()
     if not text:
@@ -376,6 +410,7 @@ def build_prompt(
     gavin_hack: str = "",
     local_color: str = "",
     variation_directive: str = "",
+    include_comments: bool = True,
 ) -> str:
     """Build the user prompt string without calling the API. Used by the GUI prompt editor."""
     opening = _extract_transcript_opening(transcript_text)
@@ -392,17 +427,49 @@ def build_prompt(
     else:
         hack_hint = "End after his 1-2 sentences. Do not add anything extra.\n"
     variation_block = f"{variation_directive}\n\n" if variation_directive else ""
+    if include_comments:
+        comment_instructions = _VOICE_COMMENT_INSTRUCTIONS.format(gavin_hack_hint=hack_hint) + _LOCATIONS_INSTRUCTIONS
+        comment_json_fields = _VOICE_COMMENT_JSON_FIELDS + _LOCATIONS_JSON_FIELD
+    else:
+        comment_instructions = _LOCATIONS_INSTRUCTIONS
+        comment_json_fields = _LOCATIONS_JSON_FIELD
     return USER_PROMPT_TMPL.format(
         existing_title=existing_title or "(none)",
         existing_description=existing_description or "(none — JT hasn't written one yet)",
         transcript_text=transcript_text,
         ai_notes_block=_format_ai_notes(ai_notes),
         transcript_opening_hint=opening_hint,
-        gavin_hack_hint=hack_hint,
         local_color_hint=local_color,
         variation_block=variation_block,
+        comment_instructions=comment_instructions,
+        comment_json_fields=comment_json_fields,
     )
 
+
+_LOCATIONS_INSTRUCTIONS = """\
+For locations: list every specific named place from the transcript (towns, businesses, parks, landmarks). Any place named in the transcript or description MUST appear in this list — do not omit it. Be granular: "Pelican Cove, Destin, FL" beats "Destin, FL". Use JT's route (Key West → Gulf Coast west → Los Angeles → Flagstaff) to disambiguate. If no specific places are named, return [].
+
+"""
+
+_LOCATIONS_JSON_FIELD = """,
+  "locations": [
+    {{"label": "Place name, City, State", "query": "plain text Google Maps search"}}
+  ]"""
+
+_VOICE_COMMENT_INSTRUCTIONS = """\
+comment_jt is WRITTEN BY JT (@roll4veterans). JT was there — he's commenting on his own video.
+No greeting, no opener — jump straight into a specific reaction to what happened. \
+Drop one relevant emoji naturally in the text (not at the start). 1-2 sentences max. \
+End with a question for viewers or an invitation to share. \
+JT speaks from experience — he does NOT ask himself what something was like. MUST NOT be empty.
+
+comment_gavin is WRITTEN BY GAVIN GREY from his @erictracy5584 account. His handle contains his birth name (Eric) but he goes by GAVIN — NEVER call him Eric. Gavin is JT's actual brother, watching from his farm in Kansas and replying to comment_jt. No greeting — just dive straight into 1-2 sentences reacting to JT's specific words. Warm, slightly goofy. If JT's comment contains a question, answer it. {gavin_hack_hint}NEVER reply to a comment by the same account. MUST NOT be empty.
+
+"""
+
+_VOICE_COMMENT_JSON_FIELDS = """,
+  "comment_jt": "WRITTEN BY JT — JT was there, speaks from experience, invites audience to engage. Opener variant + emoji, blank line, 1-2 sentences. MUST NOT be empty.",
+  "comment_gavin": "WRITTEN BY GAVIN (JT's brother in Kansas) — no greeting, just 1-2 sentences reacting to comment_jt, warm and goofy. MUST NOT be empty.\""""
 
 USER_PROMPT_TMPL = """\
 Read this full transcript carefully. Pull out the most interesting, specific, \
@@ -444,27 +511,12 @@ not a line to copy. Structure comes from what actually happened, not from a temp
 Some videos are one strong moment; write that. Some are a string of encounters; \
 follow the thread. Zoom out to the mission when it fits naturally; stay close to the moment when it doesn't.
 
-comment_jt is WRITTEN BY JT (@roll4veterans). JT was there — he's commenting on his own video.
-No greeting, no opener — jump straight into a specific reaction to what happened. \
-Drop one relevant emoji naturally in the text (not at the start). 1-2 sentences max. \
-End with a question for viewers or an invitation to share. \
-JT speaks from experience — he does NOT ask himself what something was like. MUST NOT be empty.
-
-comment_gavin is WRITTEN BY GAVIN GREY from his @erictracy5584 account. His handle contains his birth name (Eric) but he goes by GAVIN — NEVER call him Eric. Gavin is JT's actual brother, watching from his farm in Kansas and replying to comment_jt. No greeting — just dive straight into 1-2 sentences reacting to JT's specific words. Warm, slightly goofy. If JT's comment contains a question, answer it. {gavin_hack_hint}NEVER reply to a comment by the same account. MUST NOT be empty.
-
-For locations: list every specific named place from the transcript (towns, businesses, parks, landmarks). Any place named in the transcript or description MUST appear in this list — do not omit it. Be granular: "Pelican Cove, Destin, FL" beats "Destin, FL". Use JT's route (Key West → Gulf Coast west → Los Angeles → Flagstaff) to disambiguate. If no specific places are named, return [].
-
-Generate the following and respond ONLY with valid JSON (no markdown, no extra text):
+{comment_instructions}Generate the following and respond ONLY with valid JSON (no markdown, no extra text):
 {{
   "title": "Punchy YouTube Short title, max 60 chars, action-oriented, no generic phrases",
   "description": "Full description. First line: Hello friend! + emoji. Then \n\n. Then 3-4 natural paragraphs. No headers, no lists. End with \n\n then a closing line (e.g. Roll for veterans.) on its own.",
   "tags": ["15-20 YouTube tags", "mix of broad cycling/veteran tags and specific content tags"],
-  "hashtags": "space-separated hashtags — always_include first, then 5-7 from evergreen pool, then content-specific. Aim for 12-16 total.",
-  "comment_jt": "WRITTEN BY JT — JT was there, speaks from experience, invites audience to engage. Opener variant + emoji, blank line, 1-2 sentences. MUST NOT be empty.",
-  "comment_gavin": "WRITTEN BY GAVIN (JT's brother in Kansas) — no greeting, just 1-2 sentences reacting to comment_jt, warm and goofy. MUST NOT be empty.",
-  "locations": [
-    {{"label": "Place name, City, State", "query": "plain text Google Maps search"}}
-  ]
+  "hashtags": "space-separated hashtags — always_include first, then 5-7 from evergreen pool, then content-specific. Aim for 12-16 total."{comment_json_fields}
 }}"""
 
 
@@ -503,6 +555,7 @@ def generate_metadata(
     force: bool = False,
     prompt_override: str | None = None,
     ai_notes: str = "",
+    include_comments: bool = True,
 ) -> dict:
     """Generate AI metadata for a video. Caches result in data/generated/{video_id}_metadata.json.
 
@@ -533,14 +586,16 @@ def generate_metadata(
         transcript_text=transcript_text,
     )
     variation_directive = _build_variation_directive()
+    merged_notes = _merge_ai_notes(_load_global_ai_notes(), ai_notes)
     prompt = prompt_override if prompt_override is not None else build_prompt(
         transcript_text=transcript_text,
         existing_title=existing_title,
         existing_description=existing_description,
-        ai_notes=ai_notes,
+        ai_notes=merged_notes,
         gavin_hack=gavin_hack,
         local_color=local_color,
         variation_directive=variation_directive,
+        include_comments=include_comments,
     )
 
     print(f"[content_gen] Generating metadata for {video_id} ...")
@@ -564,7 +619,13 @@ def generate_metadata(
         raise ValueError(f"Gemini returned invalid JSON for {video_id}: {e}\nRaw: {raw}") from e
 
     base_desc = generated.get("description", "")
-    hashtags = generated.get("hashtags", "")
+    raw_hashtags = generated.get("hashtags", "")
+    # Ensure every token starts with # — Gemini sometimes omits them
+    hashtags = " ".join(
+        t if t.startswith("#") else f"#{t}"
+        for t in raw_hashtags.split()
+        if t
+    )
     footer = _build_footer(hashtags, transcript_urls or [])
     full_description = base_desc + footer
 
@@ -626,5 +687,6 @@ def generate_all(videos: list[dict], transcripts: dict, force: bool = False) -> 
             transcript_urls=t_data.get("urls", []),
             force=force,
             ai_notes=saved.get("ai_notes", ""),
+            include_comments=False,
         )
     return results

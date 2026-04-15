@@ -69,7 +69,9 @@ def discover_videos(channel_url: str = CHANNEL_URL, force: bool = False) -> list
             "tags": entry.get("tags") if entry.get("tags") is not None else (cached.get("tags") or []),
             "duration": entry.get("duration") or cached.get("duration"),
             "view_count": entry.get("view_count") or cached.get("view_count"),
-            "availability": entry.get("availability", "") or cached.get("availability", ""),
+            # yt-dlp only returns videos it can see on the public channel page,
+            # so anything it finds is at least public — don't inherit stale "unlisted"
+            "availability": entry.get("availability") or "public",
         })
 
     # Merge back cached videos not returned by yt-dlp (e.g. unlisted/private videos

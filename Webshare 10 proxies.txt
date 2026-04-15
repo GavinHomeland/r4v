@@ -1,9 +1,1 @@
-31.59.20.176:6754:kunszvri:f4my5q4r8hbn
-23.95.150.145:6114:kunszvri:f4my5q4r8hbn
-198.23.239.134:6540:kunszvri:f4my5q4r8hbn
-45.38.107.97:6014:kunszvri:f4my5q4r8hbn
-107.172.163.27:6543:kunszvri:f4my5q4r8hbn
-198.105.121.200:6462:kunszvri:f4my5q4r8hbn
-64.137.96.74:6641:kunszvri:f4my5q4r8hbn
-216.10.27.159:6837:kunszvri:f4my5q4r8hbn
-142.111.67.146:5611:kunszvri:f4my5q4r8hbn
+# Proxies disabled — free allocation exhausted. Add new proxies here when available.

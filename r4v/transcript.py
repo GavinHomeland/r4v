@@ -121,6 +121,12 @@ def _is_ip_block(exc: Exception) -> bool:
     )
 
 
+def _is_proxy_auth_failure(exc: Exception) -> bool:
+    """407 or tunnel auth error — all proxies share credentials, no point retrying."""
+    msg = str(exc)
+    return "407" in msg or "Proxy Authentication Required" in msg
+
+
 _VTT_TAG_RE = re.compile(r"<[^>]+>")
 _VTT_TS_RE = re.compile(
     r"(\d+):(\d+):(\d+\.\d+)\s*-->\s*(\d+):(\d+):(\d+\.\d+)"
@@ -203,8 +209,8 @@ def _fetch_via_ytdlp(video_id: str) -> dict | None:
         if not vtt_file.exists():
             detail = stderr[:200] if stderr else "no .en.vtt file produced"
             _log(video_id, "ytdlp", "unavailable", detail)
-            print(f"[transcript] yt-dlp: no subtitles for {video_id} — trying Whisper")
-            return _fetch_via_whisper(video_id)
+            print(f"[transcript] yt-dlp: no subtitles for {video_id}")
+            return None
 
         vtt_text = vtt_file.read_text(encoding="utf-8")
 
@@ -338,6 +344,19 @@ def _fetch_via_whisper(video_id: str) -> dict | None:
     }
 
 
+def _whisper_then_ytdlp(video_id: str, cache_path) -> dict | None:
+    """Try Whisper first (better quality), fall back to yt-dlp if Whisper unavailable."""
+    result = _fetch_via_whisper(video_id)
+    if result is not None:
+        save_json(cache_path, result)
+        return result
+    print(f"[transcript] Whisper unavailable for {video_id} — trying yt-dlp")
+    result = _fetch_via_ytdlp(video_id)
+    if result is not None:
+        save_json(cache_path, result)
+    return result
+
+
 def fetch_transcript(video_id: str, force: bool = False) -> dict | object | None:
     """Fetch and cache the transcript for one video.
 
@@ -372,41 +391,35 @@ def fetch_transcript(video_id: str, force: bool = False) -> dict | object | None
         except (TranscriptsDisabled, NoTranscriptFound) as e:
             _log(video_id, "proxy_api", "unavailable",
                  f"{type(e).__name__} proxy={_proxy_used.split('@')[-1] if '@' in _proxy_used else _proxy_used}")
-            print(f"[transcript] No transcript for {video_id}: subtitles unavailable")
-            return None
+            print(f"[transcript] No YouTube captions for {video_id} — trying Whisper")
+            return _whisper_then_ytdlp(video_id, cache_path)
         except Exception as e:
             err_short = str(e)[:200]
             proxy_hint = _proxy_used.split("@")[-1] if "@" in _proxy_used else _proxy_used
             if _is_ip_block(e):
                 _log(video_id, "proxy_api", "blocked",
                      f"attempt={attempt} proxy={proxy_hint} err={err_short[:80]}")
-                # Try yt-dlp immediately on first block — avoids wasting time on
-                # more blocked proxy retries when all proxies share the same fate.
-                print(f"[transcript] IP blocked on {video_id} — trying yt-dlp fallback")
-                result = _fetch_via_ytdlp(video_id)
+                print(f"[transcript] IP blocked on {video_id} — trying Whisper")
+                result = _whisper_then_ytdlp(video_id, cache_path)
                 if result is not None:
-                    save_json(cache_path, result)
                     return result
-                # yt-dlp also failed; keep retrying proxies if attempts remain
                 if attempt < _MAX_RETRIES:
                     wait = _RETRY_WAIT * attempt
-                    print(
-                        f"[transcript] yt-dlp failed — retrying proxy "
-                        f"(attempt {attempt}/{_MAX_RETRIES}, wait {wait}s)"
-                    )
+                    print(f"[transcript] retrying proxy (attempt {attempt}/{_MAX_RETRIES}, wait {wait}s)")
                     time.sleep(wait)
                     continue
-                _log(video_id, "proxy_api", "blocked", f"gave up after {attempt} attempts + ytdlp")
+                _log(video_id, "proxy_api", "blocked", f"gave up after {attempt} attempts")
                 return _BLOCKED
-            # Private/unlisted videos need cookies — try yt-dlp with auth
+            # Proxy auth failure (407) — credentials bad, no point retrying other proxies
+            if _is_proxy_auth_failure(e):
+                _log(video_id, "proxy_api", "error", f"proxy auth failed (407) — falling back to Whisper")
+                print(f"[transcript] Proxy auth failed for {video_id} — update Webshare credentials. Trying Whisper.")
+                return _whisper_then_ytdlp(video_id, cache_path)
+            # Private/unlisted — try Whisper then yt-dlp with auth
             if "private" in err_short.lower() or "unplayable" in err_short.lower():
-                _log(video_id, "proxy_api", "blocked", f"private video — trying yt-dlp with cookies")
-                print(f"[transcript] Private video {video_id} — trying yt-dlp with cookies")
-                result = _fetch_via_ytdlp(video_id)
-                if result is not None:
-                    save_json(cache_path, result)
-                    return result
-                return None
+                _log(video_id, "proxy_api", "blocked", f"private video — trying Whisper")
+                print(f"[transcript] Private video {video_id} — trying Whisper")
+                return _whisper_then_ytdlp(video_id, cache_path)
             _log(video_id, "proxy_api", "error", f"proxy={proxy_hint} err={err_short}")
             print(f"[transcript] Error fetching {video_id}: {e}")
             return None

@@ -110,7 +110,7 @@ Have a story to share? Want to support veterans? Interested in the ride?
 **Row 1 (toolbar):** Title · Filter ▼ · ◀ N/Total ▶ · Jump combo · Search [×] · More ▼
 **Row 2 (action bar, right-justified):** `[+ Add Video]` `[Pipeline ▸]` `[Push → YouTube]` `[? Help]` `[Exit]`
 **More ▼ menu:** Pull All ▸ · Engage · Personalities (JT & Gavin) · Conversation Refresh · Mark All Done · Fetch Descriptions · Transcripts · Find Unlisted · Generate AI · Check Quota · Transcript Log · Reload · ↺ Reset
-**Push → Engage:** After a successful Push, Engage (like + comment) auto-runs 4 seconds later — no extra click needed. Skips already-engaged videos.
+**Push → Engage:** Engage does NOT run automatically after Push. Use More ▼ › Engage manually when ready, or trigger via Conversation Refresh.
 **Card area:** one video at a time; ◀/▶ navigate (disabled + non-clickable at boundaries)
 **Proc bar:** progress bar + status text (above bottom)
 **Status bar (very bottom):** Videos: N | With metadata: N | Approved: N | …

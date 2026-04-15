@@ -19,6 +19,7 @@ APPLIED_DIR = DATA_DIR / "applied"
 VIDEOS_JSON = DATA_DIR / "videos.json"
 QUOTA_LOG_JSON = DATA_DIR / "quota_log.json"
 TRANSCRIPT_LOG_JSONL = DATA_DIR / "transcript_log.jsonl"
+GLOBAL_AI_NOTES_JSON = DATA_DIR / "global_ai_notes.json"
 
 CONFIG_DIR = PROJECT_ROOT / "config"
 CLIENT_SECRET_FILE = CONFIG_DIR / "client_secret.json"

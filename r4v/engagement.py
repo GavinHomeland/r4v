@@ -45,8 +45,8 @@ def _fully_engaged(entry: dict) -> bool:
             return True  # legacy entry — treated as complete
     return (
         entry.get(_K_LIKED_JT)
-        and entry.get(_K_COMMENTED_JT)
-        and entry.get(_K_COMMENTED_GAV)
+        and entry.get(_K_COMMENTED_JT)  # True or "skipped" — both truthy
+        and entry.get(_K_COMMENTED_GAV)  # True or "skipped" — both truthy
     )
 
 
@@ -182,31 +182,42 @@ def run_engagement(
 
         # Step 4: JT's voice comment (JT's account) — capture thread ID for Gavin reply
         jt_thread_id = entry.get(_K_JT_THREAD_ID)
-        if comment_jt and not entry.get(_K_COMMENTED_JT):
-            tid = _post_top_level(service_jt, video_id, comment_jt, "@roll4veterans", dry_run)
-            if tid:
-                results["commented"].append(f"{video_id}:jt")
-                if not dry_run:
-                    entry[_K_COMMENTED_JT] = True
-                    entry[_K_COMMENTED_LEGACY] = True
-                    entry[_K_JT_THREAD_ID] = tid
-                    jt_thread_id = tid
+        if not entry.get(_K_COMMENTED_JT):
+            if comment_jt:
+                tid = _post_top_level(service_jt, video_id, comment_jt, "@roll4veterans", dry_run)
+                if tid:
+                    results["commented"].append(f"{video_id}:jt")
+                    if not dry_run:
+                        entry[_K_COMMENTED_JT] = True
+                        entry[_K_COMMENTED_LEGACY] = True
+                        entry[_K_JT_THREAD_ID] = tid
+                        jt_thread_id = tid
+                else:
+                    results["failed"].append(f"{video_id}:comment_jt")
             else:
-                results["failed"].append(f"{video_id}:comment_jt")
+                # No comment content — mark done so this video isn't reprocessed
+                if not dry_run:
+                    entry[_K_COMMENTED_JT] = "skipped"
+                    entry[_K_COMMENTED_LEGACY] = True
 
         # Step 5: Gavin's reply to JT's comment thread
-        if comment_gavin and not entry.get(_K_COMMENTED_GAV):
-            if service_gavin is not None and jt_thread_id:
-                if _post_reply(service_gavin, jt_thread_id, comment_gavin, "@erictracy5584", dry_run):
-                    results["commented"].append(f"{video_id}:gavin")
-                    if not dry_run:
-                        entry[_K_COMMENTED_GAV] = True
-                else:
-                    results["failed"].append(f"{video_id}:comment_gavin")
-            elif service_gavin is None:
-                print(f"  [engage] Skipping Gavin reply \u2014 token_gavin.json not set up yet")
-            elif not jt_thread_id:
-                print(f"  [engage] Skipping Gavin reply \u2014 JT thread ID unknown (JT comment not posted yet)")
+        if not entry.get(_K_COMMENTED_GAV):
+            if comment_gavin:
+                if service_gavin is not None and jt_thread_id:
+                    if _post_reply(service_gavin, jt_thread_id, comment_gavin, "@erictracy5584", dry_run):
+                        results["commented"].append(f"{video_id}:gavin")
+                        if not dry_run:
+                            entry[_K_COMMENTED_GAV] = True
+                    else:
+                        results["failed"].append(f"{video_id}:comment_gavin")
+                elif service_gavin is None:
+                    print(f"  [engage] Skipping Gavin reply \u2014 token_gavin.json not set up yet")
+                elif not jt_thread_id:
+                    print(f"  [engage] Skipping Gavin reply \u2014 JT thread ID unknown (JT comment not posted yet)")
+            else:
+                # No comment content — mark done so this video isn't reprocessed
+                if not dry_run:
+                    entry[_K_COMMENTED_GAV] = "skipped"
 
         if not dry_run:
             _save_engagement_log(log)
