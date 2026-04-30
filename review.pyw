@@ -3151,7 +3151,7 @@ class R4VReviewApp:
         self._schedule_auto_check()
 
     def _clean_pending_queue(self):
-        """Remove from pending_video_ids any video that is fully processed or already pushed.
+        """Remove from pending_video_ids any video that is fully processed, pushed, or private.
 
         Runs on startup and after every pipeline/push so IDs don't get stuck.
         """
@@ -3159,8 +3159,16 @@ class R4VReviewApp:
         pending = prefs.get("pending_video_ids", [])
         if not pending:
             return
+
+        # Build a quick lookup of video availability from videos.json
+        all_videos = load_json(VIDEOS_JSON) or []
+        availability = {v["id"]: v.get("availability", "public") for v in all_videos if "id" in v}
+
         kept = []
         for vid in pending:
+            # Drop if private — transcripts will never be available
+            if availability.get(vid) == "private":
+                continue
             meta_path = GENERATED_DIR / f"{vid}_metadata.json"
             meta = load_json(meta_path) if meta_path.exists() else None
             # Drop if pushed (applied file exists) or fully processed with approved state
@@ -3217,6 +3225,7 @@ class R4VReviewApp:
             pipeline_args += ["--video-id", vid]
 
         attempted = set(unprocessed)
+        _MAX_TRANSCRIPT_FAILURES = 3
 
         def _on_done(rc):
             self._load_data()
@@ -3227,24 +3236,47 @@ class R4VReviewApp:
             newly_done = attempted - now_unprocessed
             still_pending = attempted & now_unprocessed
 
-            lines = []
+            # Increment failure counters for videos that still have no transcript
+            prefs = load_json(UI_PREFS_JSON) or {}
+            failures = prefs.get("transcript_failures", {})
+            gave_up = []
+            for vid in still_pending:
+                failures[vid] = failures.get(vid, 0) + 1
+                if failures[vid] >= _MAX_TRANSCRIPT_FAILURES:
+                    gave_up.append(vid)
+            # Drop give-up videos from pending and clear their counter
+            if gave_up:
+                pending = prefs.get("pending_video_ids", [])
+                prefs["pending_video_ids"] = [v for v in pending if v not in gave_up]
+                for vid in gave_up:
+                    failures.pop(vid, None)
+            # Clear counters for newly-done videos
+            for vid in newly_done:
+                failures.pop(vid, None)
+            prefs["transcript_failures"] = failures
+            save_json(UI_PREFS_JSON, prefs)
+
             import datetime as _dt
             ts = _dt.datetime.now().strftime("%H:%M")
-            lines.append(f"Auto-check completed at {ts}")
-            lines.append("")
+            lines = [f"Auto-check completed at {ts}", ""]
+            vids_list = self._videos if hasattr(self, "_videos") else []
+            title_map = {v["id"]: v.get("title", v["id"])[:50] for v in vids_list}
             if newly_done:
-                vids_list = self._videos if hasattr(self, "_videos") else []
-                title_map = {v["id"]: v.get("title", v["id"])[:50] for v in vids_list}
                 lines.append(f"✓ Processed ({len(newly_done)}):")
                 for vid in sorted(newly_done):
                     lines.append(f"   {title_map.get(vid, vid)}")
-            if still_pending:
-                lines.append(f"⏳ Still waiting for captions ({len(still_pending)}):")
-                for vid in sorted(still_pending):
-                    lines.append(f"   {vid}")
+            retrying = still_pending - set(gave_up)
+            if retrying:
+                lines.append(f"⏳ Still waiting for captions ({len(retrying)}):")
+                for vid in sorted(retrying):
+                    lines.append(f"   {title_map.get(vid, vid)}  (attempt {failures.get(vid,0)}/{_MAX_TRANSCRIPT_FAILURES})")
                 lines.append("")
                 lines.append("Will retry in 30 minutes.")
-            if not newly_done and not still_pending:
+            if gave_up:
+                lines.append(f"✗ Gave up after {_MAX_TRANSCRIPT_FAILURES} failures — removed from queue:")
+                for vid in sorted(gave_up):
+                    lines.append(f"   {title_map.get(vid, vid)}")
+            if not newly_done and not retrying and not gave_up:
                 lines.append("Nothing changed.")
 
             self._show_auto_check_result("\n".join(lines))

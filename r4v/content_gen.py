@@ -8,7 +8,7 @@ from urllib.parse import quote_plus
 from google import genai
 from google.genai import types
 
-from config.settings import GEMINI_API_KEY, GEMINI_MODEL, GENERATED_DIR, FOOTER_TEMPLATE, GLOBAL_AI_NOTES_JSON
+from config.settings import GEMINI_API_KEY, GEMINI_MODEL, GENERATED_DIR, FOOTER_TEMPLATE, GLOBAL_AI_NOTES_JSON, GAVIN_OPS_JSON
 from r4v.storage import load_json, save_json
 
 _client: genai.Client | None = None
@@ -105,18 +105,26 @@ def _load_jt_profile() -> str:
     return "\n".join(lines)
 
 
+def _load_gavin_ops() -> dict:
+    """Load Gavin's operational config (comment pools, hacks) from gavin_ops.json."""
+    try:
+        from r4v.storage import load_json
+        return load_json(GAVIN_OPS_JSON) or {}
+    except Exception:
+        return {}
+
+
 def _load_gavin_profile() -> str:
-    """Build Gavin's personality profile string from the cached personalities data."""
+    """Build Gavin's personality profile string for the AI prompt."""
     data = _load_personalities()
     gavin = data.get("gavin", {})
-    if not gavin:
-        return ""
+    ops = _load_gavin_ops()
+    priorities = ops.get("editorial_priorities", [])
 
-    priorities = gavin.get("editorial_priorities", [])
-
+    relationship = gavin.get("relationship", gavin.get("relationship_to_jt", "JT's brother and channel manager."))
     lines = [
         "ABOUT GAVIN (JT's brother — writes comment_gavin ONLY, not descriptions):",
-        f"  {gavin.get('relationship_to_jt', '')}",
+        f"  {relationship}",
         "  His YouTube handle is @erictracy5584 (birth name), but he goes by GAVIN — NEVER call him Eric.",
         "",
         "GAVIN'S COMMENT RULES:",
@@ -254,8 +262,8 @@ def _build_variation_directive() -> str:
     featured_opener = random.choice(all_openers) if all_openers else ""
 
     # Random Gavin opener
-    gavin = data.get("gavin", {})
-    gavin_openers = gavin.get("comment_opener_variants", [])
+    gavin_ops = _load_gavin_ops()
+    gavin_openers = gavin_ops.get("comment_opener_variants", [])
     gavin_opener = random.choice(gavin_openers) if gavin_openers else "Hi, Brother"
 
     lines = [
@@ -287,10 +295,9 @@ def _pick_gavin_hack() -> str:
     """Pre-select a random lead_in + hack pair 25% of the time; else return ''."""
     if random.random() > 0.25:
         return ""
-    data = _load_personalities()
-    gavin = data.get("gavin", {})
-    lead_ins = gavin.get("conversational_lead_ins", [])
-    hacks = gavin.get("life_hack_pool", [])
+    ops = _load_gavin_ops()
+    lead_ins = ops.get("conversational_lead_ins", [])
+    hacks = ops.get("life_hack_pool", [])
     if lead_ins and hacks:
         return f"{random.choice(lead_ins)} {random.choice(hacks)}"
     return ""

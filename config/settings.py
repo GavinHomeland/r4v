@@ -22,7 +22,8 @@ TRANSCRIPT_LOG_JSONL = DATA_DIR / "transcript_log.jsonl"
 GLOBAL_AI_NOTES_JSON = DATA_DIR / "global_ai_notes.json"
 
 CONFIG_DIR = PROJECT_ROOT / "config"
-CLIENT_SECRET_FILE = CONFIG_DIR / "client_secret.json"
+CLIENT_SECRET_FILE  = CONFIG_DIR / "client_secret.json"
+GAVIN_OPS_JSON      = CONFIG_DIR / "gavin_ops.json"
 # Two OAuth tokens - one per Google account:
 TOKEN_FILE_JT    = CONFIG_DIR / "token_jt.json"    # JT's owner account - all pipeline ops
 TOKEN_FILE_GAVIN = CONFIG_DIR / "token_gavin.json"  # Gavin's manager account - engage 
