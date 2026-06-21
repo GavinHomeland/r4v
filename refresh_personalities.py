@@ -162,19 +162,26 @@ def run(force: bool = False) -> bool:
     personalities = load_json(PERSONALITIES_PATH)
     if not personalities or "jt" not in personalities:
         print("[refresh] personalities.json missing or malformed — aborting.")
+        _write_flag("malformed_personalities")
         return False
 
     _check_size_warning(personalities)
     prompt = _build_prompt(personalities, transcripts)
 
-    from google.genai import types as _types
-    client = _gemini_client()
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt,
-        config=_types.GenerateContentConfig(temperature=0.7),
-    )
-    raw = response.text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+    try:
+        from google.genai import types as _types
+        client = _gemini_client()
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=_types.GenerateContentConfig(temperature=0.7),
+        )
+        raw = response.text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+    except Exception as e:
+        detail = f"{type(e).__name__}: {e}"
+        print(f"[refresh] Gemini call failed: {detail}")
+        _write_flag("api_error", detail)
+        return False
 
     try:
         changes = json.loads(raw)
@@ -215,12 +222,15 @@ def run(force: bool = False) -> bool:
     return True
 
 
-def _write_flag(status: str):
-    save_json(FLAG_PATH, {
+def _write_flag(status: str, detail: str = ""):
+    record = {
         "refreshed_at": datetime.now(timezone.utc).isoformat(),
         "status": status,
-    })
-    print(f"[refresh] Flag written: {status}")
+    }
+    if detail:
+        record["detail"] = detail[:500]
+    save_json(FLAG_PATH, record)
+    print(f"[refresh] Flag written: {status}" + (f" — {detail[:200]}" if detail else ""))
 
 
 def _git_commit_and_push(updated: bool):
@@ -265,6 +275,12 @@ if __name__ == "__main__":
                         help="Skip git commit/push")
     args = parser.parse_args()
 
-    updated = run(force=args.force)
+    try:
+        updated = run(force=args.force)
+    except Exception as e:
+        detail = f"{type(e).__name__}: {e}"
+        print(f"[refresh] Unexpected failure: {detail}")
+        _write_flag("crash", detail)
+        raise
     if not args.no_push:
         _git_commit_and_push(updated)

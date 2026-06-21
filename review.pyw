@@ -104,17 +104,6 @@ def load_all_data() -> tuple[list[dict], dict[str, dict]]:
     """Return (videos_list, {video_id: metadata_dict})."""
     videos = load_json(VIDEOS_JSON) or []
 
-    # Correct stale availability: if a video was pushed through our system it's public,
-    # regardless of what videos.json says.  Saves back if anything changed.
-    dirty = False
-    for v in videos:
-        if v.get("availability") in ("unlisted", "private"):
-            if (APPLIED_DIR / f"{v['id']}_applied.json").exists():
-                v["availability"] = "public"
-                dirty = True
-    if dirty:
-        save_json(VIDEOS_JSON, videos)
-
     metadata: dict[str, dict] = {}
     if GENERATED_DIR.exists():
         for p in sorted(GENERATED_DIR.glob("*_metadata.json")):
@@ -477,12 +466,12 @@ class R4VReviewApp:
         # Process buttons registry (populated in _build_ui; used for disable-all-during-run)
         self._proc_buttons: dict = {}
 
-        # Remembered geometry for persistent windows
-        self._transcript_win_geo: str = ""
         self._gen_this_btn = None  # current card's ↻ Gen All button (set in _build_video_card)
 
-        # Sash position memory — loaded from disk before anything else runs
-        self._sash_prefs: dict = (load_json(UI_PREFS_JSON) or {}).get("sashes", {})
+        # Persistent window geometry — loaded once at startup, saved on close
+        _prefs_boot = load_json(UI_PREFS_JSON) or {}
+        self._transcript_win_geo: str = _prefs_boot.get("transcript_win_geo", "")
+        self._sash_prefs: dict = _prefs_boot.get("sashes", {})
         # Bootstrap log (can't use _sash_log yet — method not bound — so write directly)
         try:
             import datetime as _dt2
@@ -849,9 +838,11 @@ class R4VReviewApp:
         if f == "External":
             return meta is not None and meta.get("approved") == "external"
         if f == "Unlisted":
-            return video.get("availability", "") == "unlisted"
+            return (video.get("availability", "") == "unlisted"
+                    and (meta is None or meta.get("approved") != "external"))
         if f == "Private":
-            return video.get("availability", "") == "private"
+            return (video.get("availability", "") == "private"
+                    and (meta is None or meta.get("approved") != "external"))
         return True
 
     def _load_data(self, *_, skip_autosave: bool = False):
@@ -1414,7 +1405,7 @@ class R4VReviewApp:
         else:
             self._btn_next.config(state="normal",   fg=CLR_TEXT,  cursor="hand2")
 
-    def _open_pipeline_window(self, pull_all: bool = False, skip_discover: bool = False, video_ids: list[str] | None = None):
+    def _open_pipeline_window(self, pull_all: bool = False, skip_discover: bool = False, video_ids: list[str] | None = None, force: bool = False):
         """Open a dedicated progress window and run cli.py pipeline [--all]."""
         if self._proc_running:
             messagebox.showwarning("Busy", "Another process is already running.\nUse ↺ Reset (More ▼) if it is stuck.")
@@ -1490,6 +1481,8 @@ class R4VReviewApp:
                 cmd.append("--all")
             if skip_discover and not video_ids:
                 cmd.append("--skip-discover")
+            if force:
+                cmd.append("--force")
             for vid in (video_ids or []):
                 cmd += ["--video-id", vid]
             try:
@@ -1888,6 +1881,12 @@ class R4VReviewApp:
         vpane.after(50, self._restore_sash_prefs)
         vpane.after(150, self._restore_sash_prefs)
 
+        # Save sash positions immediately on release so they persist across restarts
+        _save = lambda _e: self._save_sash_prefs()
+        vpane.bind("<ButtonRelease-1>", _save)
+        for _pane in self._col_panes:
+            _pane.bind("<ButtonRelease-1>", _save)
+
         # ── Comment rows (full-width, no Current pane) ───────────────────────
         def _comment_row(parent, label_text, meta_key, fg_color, field_key, tooltip_text):
             row = tk.Frame(parent, bg=CLR_PANEL, pady=2)
@@ -2045,6 +2044,9 @@ class R4VReviewApp:
 
         def _on_close():
             self._transcript_win_geo = win.geometry()
+            _p = load_json(UI_PREFS_JSON) or {}
+            _p["transcript_win_geo"] = self._transcript_win_geo
+            save_json(UI_PREFS_JSON, _p)
             win.destroy()
 
         win.protocol("WM_DELETE_WINDOW", _on_close)
@@ -3026,7 +3028,7 @@ class R4VReviewApp:
                 self._proc_status_var.set(f"Add Video: {summary}")
                 if not missing:
                     win.destroy()
-                    self._open_pipeline_window(video_ids=added or updated)
+                    self._open_pipeline_window(video_ids=added or updated, force=True)
                 else:
                     status_var.set(f"✓ {summary}")
                     status_lbl.config(fg=CLR_MUTED)
@@ -3039,10 +3041,21 @@ class R4VReviewApp:
                 status_var.set(f"Error: {msg}")
                 status_lbl.config(fg=CLR_SKIP)
 
+        def _do_clear():
+            _p = load_json(UI_PREFS_JSON) or {}
+            _p["pending_video_ids"] = []
+            save_json(UI_PREFS_JSON, _p)
+            txt.delete("1.0", "end")
+            txt.insert("1.0", "\n" * 9)
+            status_var.set("Queue cleared.")
+            status_lbl.config(fg=CLR_MUTED)
+
         btn_frame = tk.Frame(win, bg=CLR_BG)
         btn_frame.pack(pady=(8, 10))
         tk.Button(btn_frame, text="Add", command=_do_add, bg="#89b4fa", fg="#1e1e2e",
                   font=("Segoe UI", 12, "bold"), padx=12).pack(side="left", padx=6)
+        tk.Button(btn_frame, text="Clear Queue", command=_do_clear, bg=CLR_BTN_BG, fg=CLR_SKIP,
+                  font=("Segoe UI", 12), padx=12).pack(side="left", padx=6)
         tk.Button(btn_frame, text="Close", command=win.destroy, bg=CLR_BTN_BG, fg=CLR_TEXT,
                   font=("Segoe UI", 12), padx=12).pack(side="left", padx=6)
         win.bind("<Escape>", lambda _: win.destroy())
@@ -3451,40 +3464,11 @@ class R4VReviewApp:
 # Desktop shortcut helper
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _create_desktop_shortcut():
-    """Create a desktop shortcut for review.pyw (Windows only, runs once)."""
-    import os
-    desktop = Path(os.environ.get("USERPROFILE", "~")) / "Desktop" / "R4V Review.lnk"
-    if desktop.exists():
-        return
-    pythonw = PROJECT_ROOT / ".venv" / "Scripts" / "pythonw.exe"
-    if not pythonw.exists():
-        return
-    review = PROJECT_ROOT / "review.pyw"
-    ps = (
-        f"$ws = New-Object -ComObject WScript.Shell; "
-        f"$sc = $ws.CreateShortcut('{desktop}'); "
-        f"$sc.TargetPath = '{pythonw}'; "
-        f"$sc.Arguments = '\"{review}\"'; "
-        f"$sc.WorkingDirectory = '{PROJECT_ROOT}'; "
-        f"$sc.Description = 'R4V Metadata Review'; "
-        f"$sc.Save()"
-    )
-    try:
-        subprocess.run(
-            ["powershell", "-NonInteractive", "-Command", ps],
-            capture_output=True, timeout=10,
-        )
-    except Exception:
-        pass
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    _create_desktop_shortcut()
     root = tk.Tk()
 
     # Apply a base ttk theme that plays well with dark overrides
@@ -3512,35 +3496,10 @@ def main():
     root.option_add("*TCombobox*Listbox.selectBackground", CLR_BTN_BG)
     root.option_add("*TCombobox*Listbox.selectForeground", CLR_TEXT)
 
-    # Hide main window while pipeline runs
-    root.withdraw()
-
-    app_container = {}
-
-    def on_pipeline_done():
-        root.deiconify()
-        app = R4VReviewApp(root)
-        app_container["app"] = app
-        # Auto-run a background check after UI loads: fetches missing descriptions,
-        # transcripts, and generates metadata for anything new — reloads when done.
-        root.after(1200, lambda: app._run_cli(
-            "Auto-check", ["cli.py", "check", "--force"], None, True
-        ))
-
-    def on_pipeline_error(tb: str):
-        root.deiconify()
-        messagebox.showerror(
-            "Pipeline Error",
-            f"The pipeline encountered an error:\n\n{tb[:800]}\n\n"
-            "The review UI will open with whatever data is available.",
-        )
-        app = R4VReviewApp(root)
-        app_container["app"] = app
-        root.after(1200, lambda: app._run_cli(
-            "Auto-check", ["cli.py", "check", "--force"], None, True
-        ))
-
-    PipelineSplash(root, on_done=on_pipeline_done, on_error=on_pipeline_error)
+    # Boot straight into the review UI — no startup pipeline splash and no forced
+    # boot-time auto-check. Background discovery/transcripts/generate run via the
+    # 4-hourly scheduled task; use the Pipeline ▸ button to run on demand.
+    app = R4VReviewApp(root)
     root.mainloop()
 
 

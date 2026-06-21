@@ -11,9 +11,16 @@ Set-Location -Path "W:\r4v"
 # Pull latest from remote
 & git pull --ff-only 2>&1 | Out-Null
 
-# Sunday: refresh JT catchphrases/quotes from recent transcripts
-if ((Get-Date).DayOfWeek -eq 'Sunday') {
-    Write-Host "[run_check] Sunday — running personality refresh..."
+# TEMPORARY: run the personality refresh once per DAY (was Sunday-only) until we confirm
+# it works in the scheduled context. Revert to the Sunday check once verified.
+# Gated by the flag's date so the 4-hourly task fires it at most once per calendar day (UTC).
+$flagPath = "W:\r4v\data\personality_refresh_flag.json"
+$lastRefreshDate = $null
+if (Test-Path $flagPath) {
+    try { $lastRefreshDate = ([DateTime](Get-Content $flagPath -Raw | ConvertFrom-Json).refreshed_at).ToUniversalTime().Date } catch {}
+}
+if ($lastRefreshDate -ne (Get-Date).ToUniversalTime().Date) {
+    Write-Host "[run_check] Daily personality refresh..."
     & "W:\r4v\.venv\Scripts\python.exe" "W:\r4v\refresh_personalities.py"
 }
 

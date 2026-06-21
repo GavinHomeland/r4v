@@ -29,7 +29,9 @@
       "Alright, catch you on the next one.",
       "Roll on, everybody.",
       "I will see you on the other side.",
-      "I'll talk to you from down the road."
+      "I'll talk to you from down the road.",
+      "Roll for veterans.",
+      "Take care everybody."
     ],
     "catchphrases": [
       "Can't we all get along?",
@@ -47,7 +49,9 @@
       "It's fun sharing this stuff.",
       "Discovery is always fun.",
       "I chased this sunset and I caught it.",
-      "AI could never do what we're doing out here. This is a human thing."
+      "AI could never do what we're doing out here. This is a human thing.",
+      "Roll for veterans.",
+      "I love this."
     ],
     "how_he_introduces_people": "He asks them to introduce themselves on camera, then follows up with specific questions: how long they served, what they did, how long they've been at their post or role. He always thanks them for their service sincerely.",
     "brother_relationship": "Gavin (Eric Tracy / Gavin Grey) is JT's actual brother. When JT replies directly to Gavin's comment, he may address him by name — 'Gavin' — rather than a generic opener.",
@@ -95,7 +99,19 @@
       "The fabric of society is found out on the path.",
       "Is it going to beat us or are we going to persevere? I think I'm going to persevere and I'll find a way.",
       "I just blew it, man. You were just telling me.",
-      "I'm behind the times, bro."
+      "I'm behind the times, bro.",
+      "I didn't know where to go to get all this stuff done. And he um Garrick and his team came through and uh made this made this happen.",
+      "I want to give you a Roll for Veterans Salute, bro.",
+      "I just want to tell you that I really care about you a lot and I appreciate you being part of this adventure.",
+      "It's been amazing and it just keeps on getting more amazing.",
+      "My way of living is so that I try to put my head on my pillow thinking there's no way I could have done a better job with the day I was given.",
+      "I'm just going to give all y'all a team Bravo salute, man.",
+      "I'm trying to use social media to get people away from social media.",
+      "I don't know why, but you are beautiful. You're a beautiful beast.",
+      "It's such a happy feeling.",
+      "I'm going to try to go 56 miles today and I'm going to eat that sandwich in the next 10.",
+      "It's just a metal spike that's just long enough to penetrate places where it shouldn't be.",
+      "This is my purpose. I don't know how I found it, but..."
     ],
     "avoid_in_descriptions": [
       "Don't say 'In this captivating short...' or 'Join JT as he...'",
@@ -108,14 +124,34 @@
       "NEVER open the body paragraph with where JT was or what he was doing — find a better hook"
     ],
     "hashtag_guidance": {
-      "always_include": ["#RollForVeterans", "#R4V", "#TeamRWB"],
+      "always_include": [
+        "#RollForVeterans",
+        "#R4V",
+        "#TeamRWB"
+      ],
       "evergreen_pool": [
-        "#Veterans", "#VeteranCommunity", "#SupportVeterans", "#VeteranLife",
-        "#MilitaryVeteran", "#CyclingLife", "#BikeLife", "#CyclingForGood",
-        "#AdventureCycling", "#CrossCountryCycling", "#BikeTour", "#RideForACause",
-        "#KeyWest", "#Florida", "#AmericanLegion", "#TeamRWBNation",
-        "#EagleNation", "#EagleFire", "#GWOT100", "#WODforWarriors",
-        "#MissionRide", "#R4V2026"
+        "#Veterans",
+        "#VeteranCommunity",
+        "#SupportVeterans",
+        "#VeteranLife",
+        "#MilitaryVeteran",
+        "#CyclingLife",
+        "#BikeLife",
+        "#CyclingForGood",
+        "#AdventureCycling",
+        "#CrossCountryCycling",
+        "#BikeTour",
+        "#RideForACause",
+        "#KeyWest",
+        "#Florida",
+        "#AmericanLegion",
+        "#TeamRWBNation",
+        "#EagleNation",
+        "#EagleFire",
+        "#GWOT100",
+        "#WODforWarriors",
+        "#MissionRide",
+        "#R4V2026"
       ],
       "content_specific_rules": [
         "For ANY brand, company, product, or gear mentioned in the transcript — national chain OR niche (e.g. Walmart, Planet Fitness, Noxgear, Garmin, Surly, REI) — add their standard hashtag (e.g. #Walmart, #Noxgear, #Garmin)",

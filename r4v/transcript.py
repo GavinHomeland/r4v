@@ -45,13 +45,12 @@ _URL_RE = re.compile(r"https?://[^\s\"'>)]+")
 _MIN_DELAY = 3.0
 _MAX_DELAY = 7.0
 
-# Per-video retry on IP block
-_MAX_RETRIES = 3
-_RETRY_WAIT = 15  # seconds between retries
 
-# Fallback wait when all proxies seem blocked (no proxy configured)
-_BAN_WAIT_MINUTES = 60
-_MAX_BAN_WAITS = 3
+# When the IP / proxy pool appears blocked, stop the batch after this many consecutive
+# blocks rather than sleeping and retrying. Real IP blocks persist for hours (see the
+# transcript-log analysis), so in-run waiting just stalls the run and hammers a blocked
+# IP — the 4-hourly scheduled check retries instead.
+_MAX_CONSECUTIVE_BLOCKS = 3
 
 # Sentinel returned by fetch_transcript when IP-blocked (distinct from None = no transcript)
 _BLOCKED = object()
@@ -91,8 +90,10 @@ def _get_proxies() -> list[str]:
         _proxies = _load_proxies()
         if _proxies:
             print(f"[transcript] Loaded {len(_proxies)} proxies from {PROXIES_FILE.name}")
+        elif not PROXIES_FILE.exists():
+            print(f"[transcript] No proxy file at {PROXIES_FILE}")
         else:
-            print(f"[transcript] No proxy file found at {PROXIES_FILE.name}")
+            print(f"[transcript] {PROXIES_FILE.name} has no active proxy entries — fetching direct")
     return _proxies
 
 
@@ -372,60 +373,47 @@ def fetch_transcript(video_id: str, force: bool = False) -> dict | object | None
     proxies = _get_proxies()
     _proxy_used: str = ""
 
-    for attempt in range(1, _MAX_RETRIES + 1):
-        try:
-            if proxies:
-                _proxy_used = random.choice(proxies)
-                api = YouTubeTranscriptApi(
-                    proxy_config=GenericProxyConfig(http_url=_proxy_used, https_url=_proxy_used)
-                )
-            else:
-                _proxy_used = "direct"
-                api = YouTubeTranscriptApi()
-            segments = api.fetch(video_id)
-            seg_list = [
-                {"text": s.text, "start": s.start, "duration": s.duration}
-                for s in segments
-            ]
-            break  # success
-        except (TranscriptsDisabled, NoTranscriptFound) as e:
-            _log(video_id, "proxy_api", "unavailable",
-                 f"{type(e).__name__} proxy={_proxy_used.split('@')[-1] if '@' in _proxy_used else _proxy_used}")
-            print(f"[transcript] No YouTube captions for {video_id} — trying Whisper")
+    try:
+        if proxies:
+            _proxy_used = random.choice(proxies)
+            api = YouTubeTranscriptApi(
+                proxy_config=GenericProxyConfig(http_url=_proxy_used, https_url=_proxy_used)
+            )
+        else:
+            _proxy_used = "direct"
+            api = YouTubeTranscriptApi()
+        segments = api.fetch(video_id)
+        seg_list = [
+            {"text": s.text, "start": s.start, "duration": s.duration}
+            for s in segments
+        ]
+    except (TranscriptsDisabled, NoTranscriptFound) as e:
+        _log(video_id, "proxy_api", "unavailable",
+             f"{type(e).__name__} proxy={_proxy_used.split('@')[-1] if '@' in _proxy_used else _proxy_used}")
+        print(f"[transcript] No YouTube captions for {video_id} — trying Whisper")
+        return _whisper_then_ytdlp(video_id, cache_path)
+    except Exception as e:
+        err_short = str(e)[:200]
+        proxy_hint = _proxy_used.split("@")[-1] if "@" in _proxy_used else _proxy_used
+        if _is_ip_block(e):
+            _log(video_id, "proxy_api", "blocked", f"proxy={proxy_hint} err={err_short[:80]}")
+            print(f"[transcript] IP blocked on {video_id} — trying Whisper/yt-dlp")
+            result = _whisper_then_ytdlp(video_id, cache_path)
+            if result is not None:
+                return result
+            _log(video_id, "proxy_api", "blocked", "all methods exhausted — no transcript available")
+            return _BLOCKED
+        if _is_proxy_auth_failure(e):
+            _log(video_id, "proxy_api", "error", "proxy auth failed (407) — falling back to Whisper")
+            print(f"[transcript] Proxy auth failed for {video_id} — update Webshare credentials. Trying Whisper.")
             return _whisper_then_ytdlp(video_id, cache_path)
-        except Exception as e:
-            err_short = str(e)[:200]
-            proxy_hint = _proxy_used.split("@")[-1] if "@" in _proxy_used else _proxy_used
-            if _is_ip_block(e):
-                _log(video_id, "proxy_api", "blocked",
-                     f"attempt={attempt} proxy={proxy_hint} err={err_short[:80]}")
-                print(f"[transcript] IP blocked on {video_id} — trying Whisper")
-                result = _whisper_then_ytdlp(video_id, cache_path)
-                if result is not None:
-                    return result
-                if attempt < _MAX_RETRIES:
-                    wait = _RETRY_WAIT * attempt
-                    print(f"[transcript] retrying proxy (attempt {attempt}/{_MAX_RETRIES}, wait {wait}s)")
-                    time.sleep(wait)
-                    continue
-                _log(video_id, "proxy_api", "blocked", f"gave up after {attempt} attempts")
-                return _BLOCKED
-            # Proxy auth failure (407) — credentials bad, no point retrying other proxies
-            if _is_proxy_auth_failure(e):
-                _log(video_id, "proxy_api", "error", f"proxy auth failed (407) — falling back to Whisper")
-                print(f"[transcript] Proxy auth failed for {video_id} — update Webshare credentials. Trying Whisper.")
-                return _whisper_then_ytdlp(video_id, cache_path)
-            # Private/unlisted — try Whisper then yt-dlp with auth
-            if "private" in err_short.lower() or "unplayable" in err_short.lower():
-                _log(video_id, "proxy_api", "blocked", f"private video — trying Whisper")
-                print(f"[transcript] Private video {video_id} — trying Whisper")
-                return _whisper_then_ytdlp(video_id, cache_path)
-            _log(video_id, "proxy_api", "error", f"proxy={proxy_hint} err={err_short}")
-            print(f"[transcript] Error fetching {video_id}: {e}")
-            return None
-    else:
-        _log(video_id, "proxy_api", "blocked", "for-else: all attempts exhausted")
-        return _BLOCKED
+        if "private" in err_short.lower() or "unplayable" in err_short.lower():
+            _log(video_id, "proxy_api", "blocked", "private video — trying Whisper")
+            print(f"[transcript] Private video {video_id} — trying Whisper")
+            return _whisper_then_ytdlp(video_id, cache_path)
+        _log(video_id, "proxy_api", "error", f"proxy={proxy_hint} err={err_short}")
+        print(f"[transcript] Error fetching {video_id}: {e}")
+        return None
 
     full_text = " ".join(s["text"] for s in seg_list)
     full_text = re.sub(r"\s+", " ", full_text).strip()
@@ -467,7 +455,8 @@ def fetch_all_transcripts(video_ids: list[str], force: bool = False) -> dict[str
     Videos with no transcript or that remain blocked map to None.
 
     The _BLOCKED sentinel from fetch_transcript is handled internally:
-    - consecutive blocks increment a counter that triggers a long wait (no-proxy fallback)
+    - consecutive blocks increment a counter; once it hits _MAX_CONSECUTIVE_BLOCKS the
+      batch stops early (the pool/IP is blocked) and the next scheduled check retries
     - a plain None (TranscriptsDisabled/NoTranscriptFound) does NOT count as a block
     """
     proxies = _get_proxies()
@@ -487,7 +476,6 @@ def fetch_all_transcripts(video_ids: list[str], force: bool = False) -> dict[str
     results: dict[str, dict | None] = {}
     total = len(video_ids)
     consecutive_blocks = 0
-    ban_waits = 0
 
     _log("batch", "batch", "start", f"{total} videos, force={force}, proxies={len(proxies)}")
 
@@ -507,22 +495,18 @@ def fetch_all_transcripts(video_ids: list[str], force: bool = False) -> dict[str
         result = fetch_transcript(vid, force=force)
 
         if result is _BLOCKED:
-            # Genuine IP block — count toward ban detection
+            # Genuine IP block. Don't sleep-and-retry: real blocks persist for hours,
+            # so waiting only stalls the run and hammers a blocked IP. After a few
+            # consecutive blocks the whole pool/IP is clearly blocked — stop now and
+            # let the next scheduled check (every 4h) retry.
             results[vid] = None
-            if not proxies:
-                # Only apply the long sleep when we have no proxies to rotate
-                consecutive_blocks += 1
-                if consecutive_blocks >= 2:
-                    ban_waits += 1
-                    if ban_waits > _MAX_BAN_WAITS:
-                        print(f"[transcript] Reached max ban waits ({_MAX_BAN_WAITS}). Stopping.")
-                        break
-                    print(
-                        f"[transcript] IP ban detected (ban {ban_waits}/{_MAX_BAN_WAITS}) — "
-                        f"sleeping {_BAN_WAIT_MINUTES} min then resuming..."
-                    )
-                    time.sleep(_BAN_WAIT_MINUTES * 60)
-                    consecutive_blocks = 0
+            consecutive_blocks += 1
+            if consecutive_blocks >= _MAX_CONSECUTIVE_BLOCKS:
+                print(f"[transcript] {consecutive_blocks} consecutive IP blocks — "
+                      f"pool appears blocked. Stopping; next scheduled check will retry.")
+                _log("batch", "batch", "blocked",
+                     f"stopped after {consecutive_blocks} consecutive blocks")
+                break
         elif result is None:
             # No transcript available — not an IP block, reset block counter
             consecutive_blocks = 0
