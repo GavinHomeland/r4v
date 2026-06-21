@@ -8,6 +8,29 @@ from config.settings import CHANNEL_URL, VIDEOS_JSON, YOUTUBE_CHANNEL_ID, COOKIE
 from r4v.storage import load_json, save_json
 
 
+# Refuse to overwrite the cache with a drastically smaller list. A partial or failed
+# discovery (rate-limit, empty page, momentarily unreadable cache) must never wipe a good
+# videos.json — that's the bug that collapsed the cache to 8 entries (June 2026).
+_SHRINK_GUARD_MIN_EXISTING = 20   # only guard once the cache is non-trivial
+_SHRINK_GUARD_FRACTION = 0.5      # block if the new list is < 50% of the cached count
+
+
+def _save_videos_guarded(videos: list[dict]) -> bool:
+    """Save videos.json unless doing so would catastrophically shrink the cache.
+
+    Returns True if saved, False if the save was blocked to protect the cache.
+    """
+    existing = load_json(VIDEOS_JSON) or []
+    if (len(existing) >= _SHRINK_GUARD_MIN_EXISTING
+            and len(videos) < len(existing) * _SHRINK_GUARD_FRACTION):
+        print(f"[channel] ⚠ REFUSING to overwrite videos.json: new list has "
+              f"{len(videos)} video(s) but cache has {len(existing)}. "
+              f"Likely a partial/failed discovery — keeping existing cache.")
+        return False
+    save_json(VIDEOS_JSON, videos)
+    return True
+
+
 def discover_videos(channel_url: str = CHANNEL_URL, force: bool = False) -> list[dict]:
     """Fetch all video metadata from the channel using yt-dlp.
 
@@ -83,9 +106,10 @@ def discover_videos(channel_url: str = CHANNEL_URL, force: bool = False) -> list
         videos.extend(preserved)
         print(f"[channel] + {len(preserved)} cached unlisted/private video(s) preserved")
 
-    save_json(VIDEOS_JSON, videos)
-    print(f"[channel] Found {len(videos)} videos -> saved to {VIDEOS_JSON}")
-    return videos
+    if _save_videos_guarded(videos):
+        print(f"[channel] Found {len(videos)} videos -> saved to {VIDEOS_JSON}")
+        return videos
+    return load_json(VIDEOS_JSON) or videos
 
 
 def fetch_descriptions(
@@ -304,7 +328,8 @@ def discover_unlisted_via_api(service) -> list[dict]:
         kept.append(v)
     existing = kept
 
-    save_json(VIDEOS_JSON, existing)
+    if not _save_videos_guarded(existing):
+        return load_json(VIDEOS_JSON) or existing
     unlisted = sum(1 for v in existing if v.get("availability") == "unlisted")
     msg = f"[channel] API merge: {len(existing)} total, {new_count} new Shorts added, {unlisted} unlisted"
     excluded = skipped_long + skipped_live + cleaned
