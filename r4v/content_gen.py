@@ -2,6 +2,7 @@
 import json
 import random
 import re
+import time
 import urllib.request
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -251,11 +252,14 @@ def _build_variation_directive() -> str:
     all_phrases = jt.get("catchphrases", [])
     featured_phrases = random.sample(all_phrases, min(4, len(all_phrases))) if all_phrases else []
 
-    # Random subset of closers (2 of N)
+    # Weekly closer rotation — same closer all week, rotates to the next on Monday.
+    # Uses ISO week number as index so it cycles predictably through the full list.
     all_closers = (
         [jt.get("signature_closer", "Roll for veterans.")] + jt.get("closer_variants", [])
     )
-    featured_closers = random.sample(all_closers, min(2, len(all_closers))) if all_closers else []
+    import datetime as _dt
+    _week = _dt.date.today().isocalendar()[1]
+    featured_closers = [all_closers[_week % len(all_closers)]] if all_closers else []
 
     # Random comment opener
     all_openers = jt.get("comment_opener_variants", [])
@@ -278,7 +282,7 @@ def _build_variation_directive() -> str:
     lines += [
         "  (Ignore the full catchphrase list in the system prompt — use only the ones above.)",
         "",
-        "  Closer options THIS generation (pick one that matches the register above):",
+        "  Closer for THIS WEEK — use this exact phrase, no substitutions:",
     ]
     for c in featured_closers:
         lines.append(f'    "{c}"')
@@ -489,11 +493,26 @@ EXISTING TITLE: {existing_title}
 EXISTING DESCRIPTION:
 {existing_description}
 
-Read the existing description above carefully. If it reads as natural, flowing prose or narrative —
-JT talking to fans, telling a story — treat it as the tone benchmark: study how he writes and match
-that voice. If it contains lines starting with "[[" — treat those as explicit editor instructions
-you MUST follow for this video (e.g. a name spelling, a detail to include, a correction).
-A description can contain both: prose sections to model and "[[" lines to execute.
+Read the existing description above carefully, then follow whichever rule applies:
+
+IF the existing description contains substantive prose written by JT (sentences telling the story,
+not just a footer or placeholder):
+- It is the CONTENT BLUEPRINT. Every sentence in it must survive in the rewrite — nothing gets cut.
+- Expand each sentence into a full paragraph of prose in JT's voice. The sentence is the seed;
+  the paragraph is the growth.
+- Mine the transcript for FACTS, NAMES, PLACES, and MOMENTS only — never for phrasing. The
+  transcript is how JT talks; the existing description is how JT writes. These are different.
+  Written JT is tighter, warmer, more deliberate. Spoken JT rambles, repeats, and thinks out loud.
+  The description should sound like the written version of him, not a cleaned-up transcript.
+- If the transcript contains meaningful moments, people, or details the existing description
+  doesn't mention, incorporate the substance — in the description's voice, not the transcript's.
+- The result will be longer than a typical description. That is correct. Do not shorten it.
+- Structure follows the existing description's order. Do not reorder or consolidate.
+- Lines starting with "[[" are editor instructions you MUST follow exactly.
+
+IF the existing description is empty, minimal, or only contains footer/hashtag boilerplate:
+- Write freely from the transcript in JT's voice.
+- Lines starting with "[[" are still editor instructions you MUST follow exactly.
 
 {variation_block}{local_color_hint}{ai_notes_block}FULL TRANSCRIPT:
 {transcript_text}
@@ -510,18 +529,19 @@ FIXED (non-negotiable):
 - 1-2 emojis in the body where they fit. Not forced.
 - End with \\n\\n then a SIGNATURE CLOSER on its own line — pick whichever fits the mood.
 
-{transcript_opening_hint}FEEL (not a formula — let the transcript dictate the shape):
-Write like JT talking to a friend who wasn't there. Retell it — don't quote it. \
-Lift the facts and the feeling from the transcript, then put it in JT's own words \
-as if he's telling the story later. A phrase from the transcript is a starting point, \
-not a line to copy. Structure comes from what actually happened, not from a template. \
-Some videos are one strong moment; write that. Some are a string of encounters; \
+{transcript_opening_hint}FEEL (not a formula — let the content dictate the shape):
+The transcript is raw material — extract facts, names, places, distances, and moments from it. \
+Do not borrow its sentence structure or cadence. JT speaks in run-ons and repetition; \
+the description should be deliberate, warm prose. Lift the substance, leave the rambling behind. \
+Retell it — don't transcribe it. Write like JT recounting the day to a friend later that evening, \
+after he had time to think about what mattered. A phrase from the transcript is a starting point, \
+not a line to copy. Some videos are one strong moment; write that. Some are a string of encounters; \
 follow the thread. Zoom out to the mission when it fits naturally; stay close to the moment when it doesn't.
 
 {comment_instructions}Generate the following and respond ONLY with valid JSON (no markdown, no extra text):
 {{
-  "title": "Punchy YouTube Short title, max 60 chars, action-oriented, no generic phrases",
-  "description": "Full description. First line: Hello friend! + emoji. Then \n\n. Then 3-4 natural paragraphs. No headers, no lists. End with \n\n then a closing line (e.g. Roll for veterans.) on its own.",
+  "title": "YouTube Shorts title — max 60 chars. A good title does NOT explain what the video is about. It makes you feel something or leaves a question open that only watching can answer. Think of it as the first line of a conversation, not a label on a box. BANNED PATTERNS — these are all failures: anything with a colon ('Bike Shop Chat: COVID Got You Hooked?' — bad), anything with a location or business name ('Mountain Star Adventures: Bike Shop Meetup in El Paso' — bad, 'El Paso Bike Shop & a New Friend' — bad), anything that describes the setting instead of the feeling. GOOD EXAMPLES from this channel: 'COVID Got You Hooked?' / 'A New Friend' / 'A Moment of Reflection' / 'I Almost Didn't Make It' — notice: no location, no establishment name, no colon, 5 words or fewer, implies a story without telling it. Write the title that makes someone stop scrolling. If your draft contains a colon or a place name, throw it out.",
+  "description": "Full description. First line: Hello friend! + emoji. Then \n\n. Then the body — if JT wrote an existing description, one paragraph per sentence (may be many paragraphs); if starting from transcript only, as many paragraphs as the story needs. No headers, no lists. End with \n\n then a closing line (e.g. Roll for veterans.) on its own.",
   "tags": ["15-20 YouTube tags", "mix of broad cycling/veteran tags and specific content tags"],
   "hashtags": "space-separated hashtags — always_include first, then 5-7 from evergreen pool, then content-specific. Aim for 12-16 total."{comment_json_fields}
 }}"""
@@ -553,6 +573,15 @@ def _build_location_comment(locations: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _strip_title_prefix(title: str) -> str:
+    """If Gemini used 'Context: Hook' format, drop everything up to and including the colon."""
+    if ":" in title:
+        after = title.split(":", 1)[1].strip()
+        if after:
+            return after
+    return title
+
+
 def generate_metadata(
     video_id: str,
     transcript_text: str,
@@ -563,11 +592,15 @@ def generate_metadata(
     prompt_override: str | None = None,
     ai_notes: str = "",
     include_comments: bool = True,
+    reset_approval: bool = False,
 ) -> dict:
     """Generate AI metadata for a video. Caches result in data/generated/{video_id}_metadata.json.
 
     prompt_override: if provided, skip building the prompt from USER_PROMPT_TMPL and use this
     string directly. Used by the GUI prompt editor when the user has edited the prompt.
+
+    reset_approval: if True, sets approved=None regardless of prior state. Use when
+    treating a video as fresh (e.g. re-added via Add Video dialog).
     """
     cache_path = GENERATED_DIR / f"{video_id}_metadata.json"
     if not force and prompt_override is None and cache_path.exists():
@@ -575,9 +608,9 @@ def generate_metadata(
         if cached and cached.get("title"):
             return cached
 
-    # Preserve approval so regeneration never resets it
+    # Preserve approval across regeneration unless caller explicitly wants a fresh start.
     existing_approved = None
-    if cache_path.exists():
+    if not reset_approval and cache_path.exists():
         try:
             old = load_json(cache_path)
             if old:
@@ -606,14 +639,35 @@ def generate_metadata(
     )
 
     print(f"[content_gen] Generating metadata for {video_id} ...")
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=_build_system_prompt(),
-            temperature=0.9,
-        ),
-    )
+    _MAX_GEMINI_RETRIES = 4
+    _RETRYABLE_CODES = {429, 500, 503}
+    response = None
+    for _attempt in range(1, _MAX_GEMINI_RETRIES + 1):
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=_build_system_prompt(),
+                    temperature=0.9,
+                    # Constrain output to valid JSON so the model escapes inner quotes
+                    # (e.g. a quoted phrase in the description) instead of breaking the parse.
+                    response_mime_type="application/json",
+                ),
+            )
+            break
+        except Exception as _e:
+            _code = getattr(_e, "status_code", None) or getattr(_e, "code", None)
+            _retryable = _code in _RETRYABLE_CODES or any(
+                str(c) in str(_e) for c in _RETRYABLE_CODES
+            )
+            if _retryable and _attempt < _MAX_GEMINI_RETRIES:
+                _wait = 2 ** _attempt  # 2s, 4s, 8s
+                print(f"[content_gen] Gemini {_code or 'error'} — retrying in {_wait}s "
+                      f"(attempt {_attempt}/{_MAX_GEMINI_RETRIES})")
+                time.sleep(_wait)
+            else:
+                raise
     raw = response.text.strip()
 
     # Strip markdown code fences if Gemini wraps output
@@ -648,7 +702,7 @@ def generate_metadata(
     result = {
         "video_id": video_id,
         "existing_title": existing_title,
-        "title": generated.get("title", existing_title),
+        "title": _strip_title_prefix(generated.get("title", existing_title)),
         "description": full_description,
         "description_base": base_desc,
         "tags": generated.get("tags", []),
@@ -665,8 +719,17 @@ def generate_metadata(
     return result
 
 
-def generate_all(videos: list[dict], transcripts: dict, force: bool = False) -> dict[str, dict]:
-    """Generate metadata for all videos. Returns {video_id: metadata}."""
+def generate_all(
+    videos: list[dict],
+    transcripts: dict,
+    force: bool = False,
+    reset_approval: bool = False,
+) -> dict[str, dict]:
+    """Generate metadata for all videos. Returns {video_id: metadata}.
+
+    reset_approval: if True, sets approved=None on every generated video (fresh start).
+    Use when processing explicitly pinned video IDs (e.g. from Add Video dialog).
+    """
     results = {}
     total = len(videos)
     for i, video in enumerate(videos, 1):
@@ -695,5 +758,6 @@ def generate_all(videos: list[dict], transcripts: dict, force: bool = False) -> 
             force=force,
             ai_notes=saved.get("ai_notes", ""),
             include_comments=False,
+            reset_approval=reset_approval,
         )
     return results
