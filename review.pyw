@@ -2713,12 +2713,17 @@ class R4VReviewApp:
         )
 
     def _push_schedule_dialog(self, approved_ids: list[str]):
-        """Modal dialog: push now or schedule with 4h between releases.
+        """Modal dialog: push now, or auto-schedule across a 6am–10pm Central window.
 
-        Returns {} for push-now, {video_id: RFC3339_utc_str, ...} for schedule,
-        or None if cancelled.
+        Off -> {} (release all immediately). On -> {video_id: RFC3339_utc_str, ...}
+        with slots auto-spaced across the daily window. None if cancelled.
         """
         from datetime import datetime, timezone, timedelta
+        try:
+            from zoneinfo import ZoneInfo
+            CENTRAL = ZoneInfo("America/Chicago")
+        except Exception:
+            CENTRAL = timezone(timedelta(hours=-6))  # fallback: fixed CST
 
         n = len(approved_ids)
         result_holder = [None]
@@ -2731,7 +2736,7 @@ class R4VReviewApp:
         win.grab_set()
 
         # ── Mode selector ────────────────────────────────────────────────────
-        mode_var = tk.StringVar(value="now")
+        schedule_var = tk.BooleanVar(value=False)
 
         hdr = tk.Frame(win, bg=CLR_BG)
         hdr.pack(fill="x", padx=16, pady=(14, 6))
@@ -2744,32 +2749,28 @@ class R4VReviewApp:
         modes = tk.Frame(win, bg=CLR_BG)
         modes.pack(fill="x", padx=16, pady=4)
 
-        # Default start: next round hour in local time
-        _now = datetime.now()
-        _default_start = (_now.replace(minute=0, second=0, microsecond=0)
-                          + timedelta(hours=1))
-        start_var = tk.StringVar(value=_default_start.strftime("%Y-%m-%d %H:%M"))
+        DAY_START_HOUR, DAY_END_HOUR = 6, 22      # 6 am – 10 pm Central window
+        START_TODAY_CUTOFF = 16                   # before 4 pm -> start today, else tomorrow
+        NOW_BUFFER_MIN = 3                        # keep the first "now" slot safely in the future
 
-        _saved_iv = str((load_json(UI_PREFS_JSON) or {}).get("push_interval_hours", 4))
-        interval_var = tk.StringVar(value=_saved_iv)
+        def _auto_slots_local():
+            """n tz-aware Central datetimes spread across the 6am–10pm window.
+            Before 4pm Central: start ~now and end 10pm today; otherwise 6am–10pm tomorrow."""
+            now = datetime.now(CENTRAL)
+            if now.hour < START_TODAY_CUTOFF:
+                start = now + timedelta(minutes=NOW_BUFFER_MIN)
+            else:
+                start = (now + timedelta(days=1)).replace(
+                    hour=DAY_START_HOUR, minute=0, second=0, microsecond=0)
+            end = start.replace(hour=DAY_END_HOUR, minute=0, second=0, microsecond=0)
+            if n <= 1 or end <= start:
+                return [start for _ in range(n)]
+            step = (end - start) / (n - 1)
+            return [start + step * i for i in range(n)]
 
-        sf_top = tk.Frame(sched_frame, bg=CLR_BG)
-        sf_top.pack(fill="x", pady=(6, 2))
-        tk.Label(sf_top, text="Start (local time):", bg=CLR_BG, fg=CLR_MUTED,
-                 font=(FONT_FAMILY, 11)).pack(side="left")
-        start_entry = tk.Entry(sf_top, textvariable=start_var, width=18,
-                               bg=CLR_PANEL, fg=CLR_TEXT, insertbackground=CLR_TEXT,
-                               font=(FONT_MONO, 11), relief="flat")
-        start_entry.pack(side="left", padx=(6, 0))
-        tk.Label(sf_top, text="  Interval (hours):", bg=CLR_BG, fg=CLR_MUTED,
-                 font=(FONT_FAMILY, 11)).pack(side="left")
-        interval_entry = tk.Entry(sf_top, textvariable=interval_var, width=5,
-                                  bg=CLR_PANEL, fg=CLR_TEXT, insertbackground=CLR_TEXT,
-                                  font=(FONT_MONO, 11), relief="flat")
-        interval_entry.pack(side="left", padx=(6, 0))
-        interval_lbl = tk.Label(sf_top, text="", bg=CLR_BG, fg=CLR_MUTED,
-                                font=(FONT_FAMILY, 10, "italic"))
-        interval_lbl.pack(side="left", padx=(12, 0))
+        info_lbl = tk.Label(sched_frame, text="", bg=CLR_BG, fg=CLR_MUTED,
+                            font=(FONT_FAMILY, 10, "italic"), justify="left")
+        info_lbl.pack(anchor="w", pady=(6, 2))
 
         preview_txt = tk.Text(sched_frame, height=min(n, 8), width=58,
                               bg=CLR_PANEL, fg=CLR_TEXT, font=(FONT_MONO, 10),
@@ -2777,64 +2778,42 @@ class R4VReviewApp:
         preview_txt.pack(fill="x", pady=(4, 0))
 
         def _update_preview(*_):
-            try:
-                local_tz = datetime.now().astimezone().tzinfo
-                local_dt = (datetime.strptime(start_var.get().strip(), "%Y-%m-%d %H:%M")
-                            .replace(tzinfo=local_tz))
-            except ValueError:
-                interval_lbl.config(text="(invalid date/interval)")
-                preview_txt.config(state="normal")
-                preview_txt.delete("1.0", "end")
-                preview_txt.config(state="disabled")
-                return
-
-            try:
-                iv_hours = float(interval_var.get().strip())
-                if iv_hours < 0:
-                    raise ValueError
-            except ValueError:
-                interval_lbl.config(text="(invalid interval)")
-                preview_txt.config(state="normal")
-                preview_txt.delete("1.0", "end")
-                preview_txt.config(state="disabled")
-                return
-
-            interval = timedelta(hours=iv_hours) if n > 1 else timedelta(0)
-            total_mins = int(interval.total_seconds() / 60)
-            if total_mins >= 60:
-                h, m = divmod(total_mins, 60)
-                iv_str = f"every {h}h" + (f" {m}m" if m else "")
-            else:
-                iv_str = f"every {total_mins}m"
-            interval_lbl.config(text=f"— {iv_str}")
-
+            slots = _auto_slots_local()
+            if slots:
+                first, last = slots[0], slots[-1]
+                if len(slots) > 1:
+                    mins = int((slots[1] - slots[0]).total_seconds() // 60)
+                    h, m = divmod(mins, 60)
+                    iv = (f"{h}h" + (f" {m}m" if m else "")) if h else f"{m}m"
+                    info_lbl.config(text=(f"{n} videos · {first.strftime('%b %d %I:%M%p')} → "
+                                          f"{last.strftime('%I:%M%p %Z')}  ·  ~ every {iv}"))
+                else:
+                    info_lbl.config(text=f"{n} video · {first.strftime('%b %d %I:%M%p %Z')}")
             preview_txt.config(state="normal")
             preview_txt.delete("1.0", "end")
-            for i, vid in enumerate(approved_ids):
-                slot = local_dt + interval * i
+            for i, (vid, slot) in enumerate(zip(approved_ids, slots)):
                 title = (self._video_map.get(vid, {}).get("title")
                          or self._metadata.get(vid, {}).get("existing_title", vid))[:38]
                 preview_txt.insert("end",
                     f"{i+1:2}. {slot.strftime('%b %d %I:%M %p')}  {title}\n")
             preview_txt.config(state="disabled")
 
-        start_var.trace_add("write", _update_preview)
-        interval_var.trace_add("write", _update_preview)
-
-        def _toggle():
-            if mode_var.get() == "schedule":
+        def _toggle(*_):
+            if schedule_var.get():
                 sched_frame.pack(fill="x", padx=16, pady=(0, 6))
                 _update_preview()
             else:
                 sched_frame.pack_forget()
             win.update_idletasks()
 
-        for val, lbl in [("now",      "Push now — make all Public immediately"),
-                          ("schedule", "Schedule — stagger releases")]:
-            tk.Radiobutton(modes, text=lbl, variable=mode_var, value=val,
-                           bg=CLR_BG, fg=CLR_TEXT, selectcolor=CLR_BG,
-                           activebackground=CLR_BG, activeforeground=CLR_TEXT,
-                           font=(FONT_FAMILY, 11), command=_toggle).pack(anchor="w", pady=1)
+        tk.Checkbutton(
+            modes, text="Schedule release  (6 am – 10 pm Central, auto-spaced)",
+            variable=schedule_var, command=_toggle,
+            bg=CLR_BG, fg=CLR_TEXT, selectcolor=CLR_BG,
+            activebackground=CLR_BG, activeforeground=CLR_TEXT,
+            font=(FONT_FAMILY, 11)).pack(anchor="w", pady=1)
+        tk.Label(modes, text="Unchecked = release all immediately (Public now).",
+                 bg=CLR_BG, fg=CLR_MUTED, font=(FONT_FAMILY, 10)).pack(anchor="w", pady=(0, 2))
 
         # ── Buttons ──────────────────────────────────────────────────────────
         btn_row = tk.Frame(win, bg=CLR_BG)
@@ -2845,36 +2824,13 @@ class R4VReviewApp:
             win.destroy()
 
         def _confirm():
-            if mode_var.get() == "now":
+            if not schedule_var.get():
                 result_holder[0] = {}
                 win.destroy()
                 return
-            # Build schedule map
-            try:
-                local_tz = datetime.now().astimezone().tzinfo
-                local_dt = (datetime.strptime(start_var.get().strip(), "%Y-%m-%d %H:%M")
-                            .replace(tzinfo=local_tz))
-            except ValueError:
-                messagebox.showerror("Invalid date",
-                                     "Enter start time as YYYY-MM-DD HH:MM", parent=win)
-                return
-            try:
-                iv_hours = float(interval_var.get().strip())
-                if iv_hours < 0:
-                    raise ValueError
-            except ValueError:
-                messagebox.showerror("Invalid interval",
-                                     "Enter a positive number of hours (e.g. 2 or 1.5)", parent=win)
-                return
-            prefs = load_json(UI_PREFS_JSON) or {}
-            prefs["push_interval_hours"] = iv_hours
-            save_json(UI_PREFS_JSON, prefs)
-            utc_start = local_dt.astimezone(timezone.utc)
-            interval = timedelta(hours=iv_hours) if n > 1 else timedelta(0)
             smap = {}
-            for i, vid in enumerate(approved_ids):
-                slot = utc_start + interval * i
-                smap[vid] = slot.strftime("%Y-%m-%dT%H:%M:%SZ")
+            for vid, slot in zip(approved_ids, _auto_slots_local()):
+                smap[vid] = slot.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             result_holder[0] = smap
             win.destroy()
 
