@@ -8,5 +8,6 @@ __pycache__/
 *.pyc
 .venv/
 data/
+!data/personality_refresh_flag.json
 *.log
 .claude/
