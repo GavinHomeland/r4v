@@ -234,9 +234,11 @@ def _fetch_via_ytdlp(video_id: str) -> dict | None:
 
 
 # Inline script run inside the Whisper Python environment to transcribe one file.
-# Tries CUDA first (faster), falls back to CPU if cuDNN is unavailable.
+# Tries CUDA first (faster), falls back to CPU if CUDA is unavailable.
+# os._exit(0) after printing: CTranslate2 on Windows crashes (0xC0000409) while freeing the
+# CUDA model at interpreter shutdown — AFTER the transcript is printed — so skip teardown.
 _WHISPER_SCRIPT = """\
-import sys, json
+import sys, json, os
 from faster_whisper import WhisperModel
 audio, model_name = sys.argv[1], sys.argv[2]
 try:
@@ -245,12 +247,10 @@ except Exception:
     model = WhisperModel(model_name, device="cpu", compute_type="int8")
 segs, _ = model.transcribe(audio, language="en", beam_size=5)
 print(json.dumps([{"text": s.text.strip(), "start": s.start, "duration": s.end - s.start}
-                  for s in segs if s.text.strip()]))
+                  for s in segs if s.text.strip()]), flush=True)
+sys.stderr.flush()
+os._exit(0)
 """
-
-# Directory containing cudnn_ops_infer64_8.dll — needed by ctranslate2 for CUDA.
-# Found in Miniconda a1111 env's torch/lib directory.
-_CUDNN_PATH = r"C:\Users\Rufous\Miniconda3\envs\a1111\Lib\site-packages\torch\lib"
 
 
 def _fetch_via_whisper(video_id: str) -> dict | None:
@@ -296,31 +296,28 @@ def _fetch_via_whisper(video_id: str) -> dict | None:
         script_path = tmp / "_whisper_run.py"
         script_path.write_text(_WHISPER_SCRIPT, encoding="utf-8")
 
-        # Inject cuDNN path so ctranslate2 can find cudnn_ops_infer64_8.dll for CUDA.
-        import os as _os
-        env = _os.environ.copy()
-        if Path(_CUDNN_PATH).exists():
-            env["PATH"] = _CUDNN_PATH + _os.pathsep + env.get("PATH", "")
-
+        # No extra PATH needed: the whisper env's torch ships the cuDNN 9 that ctranslate2 4.x
+        # uses. (Injecting a1111's cuDNN 8 here was unnecessary and risked a DLL mismatch.)
         try:
             proc = subprocess.run(
                 [str(WHISPER_PYTHON), str(script_path), str(audio_path), WHISPER_MODEL],
-                capture_output=True, text=True, timeout=300, env=env,
+                capture_output=True, text=True, timeout=300,
+                encoding="utf-8", errors="replace",
             )
         except Exception as e:
             _log(video_id, "whisper", "error", f"whisper subprocess failed: {e}")
             return None
 
-    if proc.returncode != 0:
-        err = proc.stderr.strip()[:200]
-        _log(video_id, "whisper", "error", f"rc={proc.returncode} {err}")
-        print(f"[transcript] whisper failed for {video_id}: {err[:100]}")
-        return None
-
+    # Parse stdout even on a nonzero exit — a native crash during shutdown can happen
+    # after a complete transcript was already printed.
     try:
         seg_list = json.loads(proc.stdout)
     except Exception:
-        _log(video_id, "whisper", "error", "bad JSON from whisper script")
+        seg_list = None
+    if seg_list is None:
+        err = proc.stderr.strip()[-200:]
+        _log(video_id, "whisper", "error", f"rc={proc.returncode} {err}")
+        print(f"[transcript] whisper failed for {video_id} (rc={proc.returncode}): {err[-100:]}")
         return None
 
     if not seg_list:
