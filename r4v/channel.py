@@ -4,7 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 import re
-from config.settings import CHANNEL_URL, VIDEOS_JSON, YOUTUBE_CHANNEL_ID, COOKIES_FILE, COOKIE_BROWSER
+from config.settings import CHANNEL_URL, VIDEOS_JSON, YOUTUBE_CHANNEL_ID, COOKIES_FILE, COOKIE_BROWSER, YTDLP_JS_ARGS
 from r4v.storage import load_json, save_json
 
 
@@ -52,6 +52,7 @@ def discover_videos(channel_url: str = CHANNEL_URL, force: bool = False) -> list
         "--flat-playlist",
         "--dump-json",
         "--no-warnings",
+        *YTDLP_JS_ARGS,
     ]
     # Inject auth so yt-dlp can see unlisted videos (logged in as @roll4veterans in Edge)
     if COOKIE_BROWSER and COOKIE_BROWSER.lower() != "none":
@@ -61,15 +62,15 @@ def discover_videos(channel_url: str = CHANNEL_URL, force: bool = False) -> list
         cmd += ["--cookies", str(COOKIES_FILE)]
         print(f"[channel] Using cookies file for auth")
     cmd.append(channel_url)
-    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     _cookie_fail = result.returncode != 0 and any(
         s in result.stderr for s in ("Could not copy", "Failed to decrypt", "DPAPI")
     )
     if _cookie_fail:
         # Browser DB is locked (browser is open) — retry without auth cookies
         print("[channel] Browser cookie extraction failed (Edge is open/locked) — retrying without auth (unlisted videos may be missed)")
-        cmd_no_auth = [sys.executable, "-m", "yt_dlp", "--flat-playlist", "--dump-json", "--no-warnings", channel_url]
-        result = subprocess.run(cmd_no_auth, capture_output=True, text=True, encoding="utf-8")
+        cmd_no_auth = [sys.executable, "-m", "yt_dlp", "--flat-playlist", "--dump-json", "--no-warnings", *YTDLP_JS_ARGS, channel_url]
+        result = subprocess.run(cmd_no_auth, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if result.returncode != 0:
         raise RuntimeError(f"yt-dlp failed:\n{result.stderr}")
 
@@ -141,11 +142,16 @@ def fetch_descriptions(
             sys.executable, "-m", "yt_dlp",
             "--dump-json", "--no-warnings",
             "--no-playlist",
+            *YTDLP_JS_ARGS,
+            # Cookies needed for unlisted videos and to get past YouTube's bot check
+            *(["--cookies", str(COOKIES_FILE)] if COOKIES_FILE.exists() else []),
             f"https://www.youtube.com/shorts/{vid_id}",
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        # errors="replace": yt-dlp's stderr can contain cp1252 bytes (e.g. ’) on Windows
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
         if result.returncode != 0 or not result.stdout.strip():
-            print("FAILED")
+            err = next((l for l in result.stderr.splitlines() if l.startswith("ERROR")), "")
+            print(f"FAILED {err[:160]}")
             continue
         try:
             info = json.loads(result.stdout.strip().splitlines()[0])
@@ -159,8 +165,15 @@ def fetch_descriptions(
             v["tags"] = tags
         print(f"ok ({len(desc)} chars)")
 
-    save_json(VIDEOS_JSON, videos)
-    print(f"[channel] Saved updated videos.json")
+    # Merge into the full on-disk cache by id — callers often pass a subset (e.g. the
+    # pipeline's active videos), and saving that subset directly wipes the rest of the cache.
+    cache = load_json(VIDEOS_JSON)
+    cache = cache if isinstance(cache, list) else []
+    updated = {v["id"]: v for v in videos}
+    cache_ids = {v["id"] for v in cache}
+    merged = [updated.get(v["id"], v) for v in cache] + [v for v in videos if v["id"] not in cache_ids]
+    if _save_videos_guarded(merged):
+        print(f"[channel] Saved updated videos.json")
     return videos
 
 

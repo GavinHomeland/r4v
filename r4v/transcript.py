@@ -11,7 +11,7 @@ from pathlib import Path
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 from youtube_transcript_api.proxies import GenericProxyConfig
 
-from config.settings import TRANSCRIPTS_DIR, PROXIES_FILE, TRANSCRIPT_LOG_JSONL, WHISPER_PYTHON, WHISPER_MODEL, COOKIES_FILE, VIDEOS_JSON
+from config.settings import TRANSCRIPTS_DIR, PROXIES_FILE, TRANSCRIPT_LOG_JSONL, WHISPER_PYTHON, WHISPER_MODEL, COOKIES_FILE, VIDEOS_JSON, YTDLP_JS_ARGS
 from r4v.storage import load_json, save_json
 
 
@@ -194,6 +194,7 @@ def _fetch_via_ytdlp(video_id: str) -> dict | None:
             "--sub-lang", "en",
             "--sub-format", "vtt",
             "--no-warnings",
+            *YTDLP_JS_ARGS,
             *_cookies_args(),
             "-o", out_tpl,
             url,
@@ -210,7 +211,8 @@ def _fetch_via_ytdlp(video_id: str) -> dict | None:
         if not vtt_file.exists():
             detail = stderr[:200] if stderr else "no .en.vtt file produced"
             _log(video_id, "ytdlp", "unavailable", detail)
-            print(f"[transcript] yt-dlp: no subtitles for {video_id}")
+            err = next((l for l in stderr.splitlines() if l.startswith("ERROR")), "")
+            print(f"[transcript] yt-dlp: no subtitles for {video_id}" + (f": {err[:120]}" if err else ""))
             return None
 
         vtt_text = vtt_file.read_text(encoding="utf-8")
@@ -268,22 +270,25 @@ def _fetch_via_whisper(video_id: str) -> dict | None:
         # Download best audio (no conversion needed — whisper handles webm/m4a/opus)
         dl_cmd = [
             sys.executable, "-m", "yt_dlp",
-            "--format", "bestaudio",
+            "--format", "bestaudio/best",
             "--no-warnings",
+            *YTDLP_JS_ARGS,
             *_cookies_args(),
             "-o", str(tmp / f"{video_id}.%(ext)s"),
             url,
         ]
         try:
-            subprocess.run(dl_cmd, capture_output=True, timeout=120)
+            dl = subprocess.run(dl_cmd, capture_output=True, timeout=120)
         except Exception as e:
             _log(video_id, "whisper", "error", f"audio download failed: {e}")
             return None
 
         audio_files = list(tmp.glob(f"{video_id}.*"))
         if not audio_files:
-            _log(video_id, "whisper", "unavailable", "yt-dlp produced no audio file")
-            print(f"[transcript] whisper: no audio downloaded for {video_id}")
+            dl_err = dl.stderr.decode(errors="replace").strip()
+            dl_err = next((l for l in dl_err.splitlines() if l.startswith("ERROR")), dl_err)[:200]
+            _log(video_id, "whisper", "unavailable", f"yt-dlp produced no audio file: {dl_err}")
+            print(f"[transcript] whisper: no audio downloaded for {video_id}: {dl_err[:120]}")
             return None
         audio_path = audio_files[0]
 

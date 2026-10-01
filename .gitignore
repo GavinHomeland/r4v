@@ -7,7 +7,9 @@ config/cookies.txt
 __pycache__/
 *.pyc
 .venv/
-data/
+# data/* (not data/) so the ! exceptions below can re-include files
+data/*
 !data/personality_refresh_flag.json
+!data/videos.json
 *.log
 .claude/

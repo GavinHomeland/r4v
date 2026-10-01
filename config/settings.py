@@ -1,5 +1,6 @@
 ﻿"""Central configuration loader for R4V automation."""
 import os
+import shutil
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -33,6 +34,9 @@ COOKIES_FILE = CONFIG_DIR / "cookies.txt"  # optional - export from browser to b
 # Set R4V_COOKIE_BROWSER=none to disable. Default: edge (logged in as @roll4veterans)
 COOKIE_BROWSER = os.environ.get("R4V_COOKIE_BROWSER", "none")  # edge/chrome/firefox or none
 PROXIES_FILE = PROJECT_ROOT / "Webshare 10 proxies.txt"  # ip:port:user:pass per line
+# yt-dlp needs a JS runtime to solve YouTube's player challenges; only deno is enabled by
+# default, so point it at Node (installed here). Without one, extraction degrades/fails.
+YTDLP_JS_ARGS = ["--js-runtimes", "node"] if shutil.which("node") else []
 
 # -- Whisper (local ASR fallback for videos with no YouTube captions) ----------
 # Python interpreter that has faster-whisper installed.
@@ -43,7 +47,9 @@ WHISPER_MODEL = os.environ.get("R4V_WHISPER_MODEL", "large-v3-turbo")  # tiny/ba
 
 # -- YouTube API ---------------------------------------------------------------
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]
-CHANNEL_URL = "https://www.youtube.com/@roll4veterans/shorts"
+# Use the permanent channel ID, not the handle — the handle changed (@roll4veterans → @roll4nature, ~Oct 2026)
+# and broke discovery with a 404. The channel ID never changes.
+CHANNEL_URL = "https://www.youtube.com/channel/UC9SwRKQDjOHFnt3PVF3xJkQ/shorts"
 
 # Daily quota safety ceiling (YouTube gives 10,000 units/day; we stay under 9,500)
 QUOTA_DAILY_LIMIT = 9_500
@@ -67,11 +73,7 @@ FOOTER_TEMPLATE = """
 JOIN THE CONVERSATION \U0001f517 \U0001f91d \U0001f517
 Have a story to share? Want to support veterans? Interested in the ride?
 
-\U0001f4f1 @roll4veterans \u2014 Follow the mission across platforms:
-   \u2022 Facebook: https://facebook.com/roll4veterans
-   \u2022 Instagram: https://instagram.com/roll4veterans
-   \u2022 TikTok: https://tiktok.com/@roll4veterans
-   \u2022 YouTube: https://youtube.com/@roll4veterans
+\U0001f4f1 Subscribe on YouTube: https://youtube.com/@roll4nature
 
 \U0001f310 Official Hub: https://r4v.songseekers.org
    \u2022 Ride updates, route maps, and real-time tracking.

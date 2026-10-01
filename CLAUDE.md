@@ -133,6 +133,9 @@ Have a story to share? Want to support veterans? Interested in the ride?
 - YouTube API won't let you update categoryId to an invalid value; default is 22 (People & Blogs)
 - OAuth consent screen must include your Google account as a test user while app is in "Testing"
 - IP rate-limit from YouTube on transcript fetching: wait 2-4 h, then use Transcripts button or scheduled check
+- Channel handle changed @roll4veterans → @roll4nature (~Oct 2026). CHANNEL_URL uses the channel ID so handle changes can't break discovery.
+- yt-dlp "Sign in to confirm you're not a bot" = YouTube flagged the IP; affects public videos too. Fix: re-export a fresh logged-in config/cookies.txt (Edge/Chrome cookies can't be read directly by yt-dlp on Windows). yt-dlp also needs a JS runtime — settings.YTDLP_JS_ARGS points it at Node.
+- The API uploads playlist does NOT return the unlisted shorts for our OAuth account — they're only in videos.json because they were added by ID. Never rebuild videos.json from scratch; it's tracked in git, so restore with `git checkout data/videos.json`.
 - "Uploaded"/draft videos are invisible to all discovery APIs — user must add by ID via Add Video dialog or `cli.py add-video`. YouTube auto-sets new uploads to Unlisted once processing finishes, so this only matters for videos stuck mid-process.
 
 ## Push / Engage patterns (hard-won lessons)
