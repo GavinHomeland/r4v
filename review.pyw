@@ -100,21 +100,53 @@ def save_json(path: Path, data):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
+# One-file snapshot of data/generated/*_metadata.json, keyed by video ID with each file's
+# (mtime_ns, size). W: is a spinning disk — opening 1,100+ small files cold takes ~20 s,
+# reading one cache file takes well under a second. Files whose mtime/size changed (edits
+# from this app, cli.py generate, etc.) are re-read; the cache is disposable.
+GENERATED_CACHE = DATA_DIR / "generated_cache.json"
+
+
 def load_all_data() -> tuple[list[dict], dict[str, dict]]:
     """Return (videos_list, {video_id: metadata_dict})."""
     videos = load_json(VIDEOS_JSON) or []
 
     metadata: dict[str, dict] = {}
     if GENERATED_DIR.exists():
-        for p in sorted(GENERATED_DIR.glob("*_metadata.json")):
+        try:
+            cache = load_json(GENERATED_CACHE) or {}
+        except Exception:
+            cache = {}
+        fresh: dict[str, dict] = {}
+        changed = False
+        with os.scandir(GENERATED_DIR) as it:   # stat info comes with the listing on Windows
+            entries = [e for e in it if e.name.endswith("_metadata.json")]
+        for e in sorted(entries, key=lambda e: Path(e.path)):
+            p = Path(e.path)
             vid = p.stem.replace("_metadata", "")
-            try:
-                data = load_json(p)
-            except Exception:
-                print(f"[data] Skipping malformed metadata file: {p.name}")
-                continue
+            st = e.stat()
+            key = [st.st_mtime_ns, st.st_size]
+            hit = cache.get(vid)
+            if hit and hit.get("k") == key:
+                data = hit.get("d")
+            else:
+                changed = True
+                try:
+                    data = load_json(p)
+                except Exception:
+                    print(f"[data] Skipping malformed metadata file: {p.name}")
+                    continue
+            fresh[vid] = {"k": key, "d": data}
             if data:
                 metadata[vid] = data
+        if changed or len(fresh) != len(cache):
+            try:
+                tmp = GENERATED_CACHE.with_suffix(".tmp")
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(fresh, f, ensure_ascii=False, separators=(",", ":"))
+                os.replace(tmp, GENERATED_CACHE)
+            except Exception as ex:
+                print(f"[data] Could not write metadata cache: {ex}")
     return videos, metadata
 
 

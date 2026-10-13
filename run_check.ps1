@@ -11,16 +11,19 @@ Set-Location -Path "W:\r4v"
 # Pull latest from remote
 & git pull --ff-only 2>&1 | Out-Null
 
-# TEMPORARY: run the personality refresh once per DAY (was Sunday-only) until we confirm
-# it works in the scheduled context. Revert to the Sunday check once verified.
-# Gated by the flag's date so the 4-hourly task fires it at most once per calendar day (UTC).
+# Weekly personality refresh: once on Sunday, or on any day if the last run is 7+ days old
+# (the PC slept through Sunday). Gated by the flag's timestamp so the 4-hourly task fires it
+# at most once per Sunday.
 $flagPath = "W:\r4v\data\personality_refresh_flag.json"
-$lastRefreshDate = $null
+$lastRefresh = $null
 if (Test-Path $flagPath) {
-    try { $lastRefreshDate = ([DateTime](Get-Content $flagPath -Raw | ConvertFrom-Json).refreshed_at).ToUniversalTime().Date } catch {}
+    try { $lastRefresh = ([DateTime](Get-Content $flagPath -Raw | ConvertFrom-Json).refreshed_at).ToLocalTime() } catch {}
 }
-if ($lastRefreshDate -ne (Get-Date).ToUniversalTime().Date) {
-    Write-Host "[run_check] Daily personality refresh..."
+$now = Get-Date
+$ranToday = $lastRefresh -and $lastRefresh.Date -eq $now.Date
+$overdue  = (-not $lastRefresh) -or (($now - $lastRefresh).TotalDays -ge 7)
+if ((($now.DayOfWeek -eq 'Sunday') -and -not $ranToday) -or $overdue) {
+    Write-Host "[run_check] Weekly personality refresh..."
     & "W:\r4v\.venv\Scripts\python.exe" "W:\r4v\refresh_personalities.py"
 }
 

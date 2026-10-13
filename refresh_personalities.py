@@ -1,29 +1,48 @@
-"""Weekly personality refresh for JT Tracy — mines transcripts for fresh catchphrases/quotes.
+"""Weekly personality refresh for JT Tracy — mines NEW transcripts for fresh catchphrases/quotes.
+
+Only transcripts not mined before are used (tracked in data/personality_refresh_mined.json);
+the run is skipped until at least MIN_NEW_TRANSCRIPTS have piled up.
 
 Run manually:   python refresh_personalities.py
-Called by:      run_check.ps1 on Sundays
+Called by:      run_check.ps1 on Sundays (or when a week has been missed)
 """
 import json
 import random
 import subprocess
 import sys
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from config.settings import GEMINI_API_KEY, GEMINI_MODEL
+from config.settings import GEMINI_API_KEY, GEMINI_MODEL, VIDEOS_JSON
 from r4v.storage import load_json, save_json
 
 PERSONALITIES_PATH = PROJECT_ROOT / "config" / "personalities.json"
 TRANSCRIPTS_DIR    = PROJECT_ROOT / "data" / "transcripts"
 FLAG_PATH          = PROJECT_ROOT / "data" / "personality_refresh_flag.json"
+MINED_PATH         = PROJECT_ROOT / "data" / "personality_refresh_mined.json"
 
 SAMPLE_SIZE = 40
 MIN_NEW_ITEMS = 3
-SIZE_WARN_THRESHOLD = 50        # total items across catchphrases + quotes + closers
-CATCHPHRASE_MIN_TRANSCRIPTS = 2  # catchphrase must appear in this many transcripts to be kept
+MIN_NEW_TRANSCRIPTS = 5        # don't run until this many un-mined transcripts exist — with only
+                               # 1-2 to read, Gemini scrapes filler ("I just work here.")
+RECURRING_MIN_TRANSCRIPTS = 2  # catchphrases + closers must appear in this many new transcripts
+QUOTE_MIN_WORDS = 8            # quotes must be a complete thought, not a fragment
+
+# Max list sizes. New items go on the front; anything past the cap falls off the back (oldest).
+LIST_CAPS = {
+    "catchphrases":                 35,
+    "real_quotes_from_transcripts": 80,
+    "closer_variants":              25,
+}
+
+# River-trip chapter start (upload_date, YYYYMMDD). Most videos.json entries have no
+# upload_date, so freshness is tracked by MINED_PATH instead; this only guards against a
+# late-fetched bike-era transcript whose upload_date IS known.
+RIVER_TRIP_START_DATE = "20260718"
 
 
 def _gemini_client():
@@ -33,15 +52,37 @@ def _gemini_client():
     return genai.Client(api_key=GEMINI_API_KEY)
 
 
-def _load_all_transcripts() -> list[str]:
-    """Return all transcript texts from the full directory (uncapped, for frequency checks)."""
-    texts = []
+def _load_mined_ids() -> set[str] | None:
+    """Return the set of already-mined video IDs, or None if tracking hasn't started yet."""
+    data = load_json(MINED_PATH)
+    if data is None:
+        return None
+    return set(data.get("mined_ids", []))
+
+
+def _save_mined_ids(ids: set[str]):
+    save_json(MINED_PATH, {"mined_ids": sorted(ids)})
+
+
+def _transcript_ids() -> set[str]:
+    return {p.stem for p in TRANSCRIPTS_DIR.glob("*.json")}
+
+
+def _load_new_transcripts(mined: set[str]) -> dict[str, str]:
+    """Return {video_id: text} for transcripts not mined yet (skipping known pre-river-trip uploads)."""
+    pre_chapter = {
+        v["id"] for v in (load_json(VIDEOS_JSON) or [])
+        if v.get("upload_date") and v["upload_date"] < RIVER_TRIP_START_DATE
+    }
+    texts = {}
     for p in TRANSCRIPTS_DIR.glob("*.json"):
+        if p.stem in mined or p.stem in pre_chapter:
+            continue
         try:
             data = load_json(p)
             text = (data or {}).get("text", "").strip()
             if text:
-                texts.append(text)
+                texts[p.stem] = text
         except Exception:
             pass
     return texts
@@ -53,35 +94,31 @@ def _sample_transcripts(all_texts: list[str], n: int) -> list[str]:
     return [t[:4000] for t in sample]
 
 
-def _count_occurrences(phrase: str, all_texts: list[str]) -> int:
-    """Count how many transcripts contain this phrase (case-insensitive)."""
-    needle = phrase.lower().strip()
-    return sum(1 for t in all_texts if needle in t.lower())
+def _normalize(text: str) -> str:
+    """Lowercase, drop punctuation, collapse whitespace — so caption punctuation doesn't break matching."""
+    return " ".join(re.sub(r"[^a-z0-9' ]+", " ", text.lower()).split())
 
 
-def _verify_catchphrases(candidates: list[str], all_texts: list[str]) -> tuple[list[str], list[tuple[str, int]]]:
-    """Split candidates into (verified, dropped). Dropped = appeared in fewer than threshold transcripts."""
-    verified, dropped = [], []
+def _count_occurrences(phrase: str, norm_texts: list[str]) -> int:
+    """Count how many (normalized) transcripts contain this phrase."""
+    needle = _normalize(phrase)
+    return sum(1 for t in norm_texts if needle in t) if needle else 0
+
+
+def _verify(candidates: list[str], norm_texts: list[str], min_transcripts: int,
+            min_words: int = 0) -> tuple[list[str], list[tuple[str, str]]]:
+    """Split candidates into (kept, dropped-with-reason)."""
+    kept, dropped = [], []
     for phrase in candidates:
-        count = _count_occurrences(phrase, all_texts)
-        if count >= CATCHPHRASE_MIN_TRANSCRIPTS:
-            verified.append(phrase)
-        else:
-            dropped.append((phrase, count))
-    return verified, dropped
-
-
-def _check_size_warning(personalities: dict):
-    """Print a warning if the JT lists are large enough to meaningfully inflate token cost."""
-    jt = personalities.get("jt", {})
-    total = (len(jt.get("catchphrases", [])) +
-             len(jt.get("real_quotes_from_transcripts", [])) +
-             len(jt.get("closer_variants", [])))
-    if total >= SIZE_WARN_THRESHOLD:
-        print(f"[refresh] ⚠ SIZE WARNING: {total} total items in JT lists "
-              f"(threshold: {SIZE_WARN_THRESHOLD}). Consider manually pruning "
-              f"config/personalities.json to keep Gemini prompt costs down.")
-    return total
+        if len(phrase.split()) < min_words:
+            dropped.append((phrase, f"under {min_words} words"))
+            continue
+        count = _count_occurrences(phrase, norm_texts)
+        if count < min_transcripts:
+            dropped.append((phrase, f"in {count}/{len(norm_texts)} transcripts, need {min_transcripts}"))
+            continue
+        kept.append(phrase)
+    return kept, dropped
 
 
 def _build_prompt(personalities: dict, transcripts: list[str]) -> str:
@@ -108,9 +145,11 @@ TRANSCRIPTS TO MINE ({len(transcripts)} samples):
 YOUR TASK:
 1. Find 4-6 NEW catchphrases JT says repeatedly or that reveal his recurring personality — NOT one-off scene descriptions. "Nature, awe, and wonder." qualifies. "It's like a placid river with raindrops falling in it." does not — that describes one moment, not his voice.
 2. Find 4-6 NEW real quotes — verbatim lines that reveal character (humor, warmth, self-deprecation, genuine surprise) in a way that would make sense across multiple videos, not tied to a single scene.
-3. Find 1-2 NEW closer_variants if any natural sign-off lines appear.
+3. Find 1-2 NEW closer_variants ONLY if JT actually signs off videos with a line he repeats. A closer is how he ends a video ("Roll for veterans.", "Take care, everybody.") — not a random last sentence.
 
 RULES:
+- Quotes must be complete thoughts of at least {QUOTE_MIN_WORDS} words. No fragments, no small talk ("I just work here."), nothing that reads like a captioning error.
+- Catchphrases and closers must show up in at least {RECURRING_MIN_TRANSCRIPTS} of the transcripts — one-offs are dropped automatically.
 - Only include items that appear verbatim or near-verbatim in the transcripts above.
 - Prefer recurring patterns and personality-revealing moments over vivid-but-unique scene descriptions.
 - Never invent or paraphrase.
@@ -129,7 +168,13 @@ If you cannot find {MIN_NEW_ITEMS} genuinely new items, return empty add lists r
 
 
 def _apply_changes(personalities: dict, changes: dict) -> tuple[dict, int]:
-    """Append new items to the jt section (additive only). Returns (updated_personalities, n_added)."""
+    """Prepend new items to the jt section (freshest first), then trim each list to LIST_CAPS.
+
+    New material goes at the front of each list so it surfaces immediately in
+    weighted/positional consumers (e.g. closer_variants' week-index rotation), and
+    the cap drops the oldest items off the back so the lists never grow unbounded.
+    Returns (updated_personalities, n_added).
+    """
     jt = personalities["jt"]
     n = 0
 
@@ -140,24 +185,41 @@ def _apply_changes(personalities: dict, changes: dict) -> tuple[dict, int]:
     ]:
         current = jt.get(key, [])
         to_add = [x for x in changes.get(add_key, []) if x and x not in current]
-        current.extend(to_add)
         n += len(to_add)
-        jt[key] = current
+        merged = to_add + current
+        cap = LIST_CAPS[key]
+        if len(merged) > cap:
+            print(f"[refresh] {key}: trimming {len(merged) - cap} oldest item(s) to stay at {cap}:")
+            for old in merged[cap:]:
+                print(f"         - {old!r}")
+        jt[key] = merged[:cap]
 
     return personalities, n
 
 
 def run(force: bool = False) -> bool:
     """Run the refresh. Returns True if personalities.json was updated."""
-    print("[refresh] Loading transcripts...")
-    all_texts = _load_all_transcripts()
-    if not all_texts:
-        print("[refresh] No transcripts found — skipping.")
-        _write_flag("no_transcripts")
+    mined = _load_mined_ids()
+    if mined is None:
+        # First run under mined-ID tracking: everything on disk has already been mined
+        # (or is bike-era), so baseline it and start counting from the next new transcript.
+        ids = _transcript_ids()
+        _save_mined_ids(ids)
+        print(f"[refresh] Started tracking — marked {len(ids)} existing transcripts as mined.")
+        _write_flag("tracking_started")
         return False
 
+    new = _load_new_transcripts(mined)
+    if not new or (len(new) < MIN_NEW_TRANSCRIPTS and not force):
+        print(f"[refresh] Only {len(new)} new transcript(s) since last mining "
+              f"(need {MIN_NEW_TRANSCRIPTS}) — waiting for more.")
+        _write_flag("too_few_new_transcripts", f"{len(new)} new")
+        return False
+
+    all_texts = list(new.values())
+    norm_texts = [_normalize(t) for t in all_texts]
     transcripts = _sample_transcripts(all_texts, SAMPLE_SIZE)
-    print(f"[refresh] {len(all_texts)} total transcripts; sampled {len(transcripts)} for Gemini.")
+    print(f"[refresh] {len(all_texts)} new transcripts; sampled {len(transcripts)} for Gemini.")
 
     personalities = load_json(PERSONALITIES_PATH)
     if not personalities or "jt" not in personalities:
@@ -165,7 +227,6 @@ def run(force: bool = False) -> bool:
         _write_flag("malformed_personalities")
         return False
 
-    _check_size_warning(personalities)
     prompt = _build_prompt(personalities, transcripts)
 
     try:
@@ -190,31 +251,43 @@ def run(force: bool = False) -> bool:
         _write_flag("json_error")
         return False
 
-    # Frequency-check catchphrases against the full corpus — scene-specific one-offs get dropped.
-    # Quotes and closers pass through: they're allowed to be one-offs if they reveal character.
-    raw_catchphrases = changes.get("add_catchphrases", [])
-    if raw_catchphrases:
-        verified, dropped = _verify_catchphrases(raw_catchphrases, all_texts)
-        changes["add_catchphrases"] = verified
+    # These transcripts have now been read — don't re-mine them next week.
+    _save_mined_ids(mined | set(new))
+
+    # Catchphrases + closers must recur across transcripts; quotes may be one-offs but must
+    # really be in a transcript and be a full thought.
+    for add_key, min_transcripts, min_words in [
+        ("add_catchphrases", RECURRING_MIN_TRANSCRIPTS, 0),
+        ("add_closers",      RECURRING_MIN_TRANSCRIPTS, 0),
+        ("add_quotes",       1,                         QUOTE_MIN_WORDS),
+    ]:
+        kept, dropped = _verify(changes.get(add_key, []), norm_texts, min_transcripts, min_words)
+        changes[add_key] = kept
         if dropped:
-            print(f"[refresh] Catchphrases dropped (too video-specific — found in <{CATCHPHRASE_MIN_TRANSCRIPTS} transcripts):")
-            for phrase, count in dropped:
-                n_total = len(all_texts)
-                print(f"         [{count}/{n_total}] {phrase!r}")
+            print(f"[refresh] {add_key} dropped:")
+            for phrase, reason in dropped:
+                print(f"         [{reason}] {phrase!r}")
 
-    total_adds = (len(changes.get("add_catchphrases", [])) +
-                  len(changes.get("add_quotes", [])) +
-                  len(changes.get("add_closers", [])))
+    total_proposed = (len(changes.get("add_catchphrases", [])) +
+                       len(changes.get("add_quotes", [])) +
+                       len(changes.get("add_closers", [])))
 
-    print(f"[refresh] Items proposed: +{total_adds}")
+    print(f"[refresh] Items proposed by Gemini: +{total_proposed}")
     print(f"[refresh] Notes: {changes.get('notes','')}")
 
-    if total_adds < MIN_NEW_ITEMS and not force:
-        print(f"[refresh] Fewer than {MIN_NEW_ITEMS} new items found — skipping personalities update.")
+    # Apply (dedups against existing items) BEFORE deciding whether there's anything
+    # worth saving — total_proposed can clear MIN_NEW_ITEMS even when every proposed
+    # item already exists verbatim (e.g. Gemini re-surfacing an existing line from a
+    # random transcript sample), which would otherwise save + flag "updated" with zero
+    # real change.
+    updated, n_changes = _apply_changes(personalities, changes)
+    print(f"[refresh] Items actually new after de-dup: +{n_changes}")
+
+    if n_changes < MIN_NEW_ITEMS and not force:
+        print(f"[refresh] Fewer than {MIN_NEW_ITEMS} genuinely new item(s) — skipping personalities update.")
         _write_flag("insufficient_new_items")
         return False
 
-    updated, n_changes = _apply_changes(personalities, changes)
     save_json(PERSONALITIES_PATH, updated)
     print(f"[refresh] personalities.json updated ({n_changes} change(s)).")
 
