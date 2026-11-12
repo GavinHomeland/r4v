@@ -334,6 +334,11 @@ def push(dry_run, video_id):
 
     if dry_run:
         click.echo("\nDry run complete. Run without --dry-run to apply changes.")
+    elif results["failed"]:
+        # Non-zero exit so the GUI does not treat a partial/total failure as success
+        click.echo(f"\nFAILED to update {len(results['failed'])} video(s): "
+                   + ", ".join(results["failed"]), err=True)
+        sys.exit(1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

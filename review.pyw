@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from pathlib import Path
 from ctypes.wintypes import RECT
@@ -2658,19 +2659,28 @@ class R4VReviewApp:
                     save_json(GENERATED_DIR / f"{vid}_metadata.json", meta)
 
         pushed_ids = list(approved)
+        push_started = time.time()
 
         def _on_push_done(rc):
-            if rc == 0:
-                newly_applied = [
-                    vid for vid in pushed_ids
-                    if (APPLIED_DIR / f"{vid}_applied.json").exists()
-                ]
+            # Count only applied records written by THIS run. Stale records from
+            # earlier pushes must not make a video look pushed.
+            newly_applied = [
+                vid for vid in pushed_ids
+                if (APPLIED_DIR / f"{vid}_applied.json").exists()
+                and (APPLIED_DIR / f"{vid}_applied.json").stat().st_mtime >= push_started - 1
+            ]
+            if newly_applied:
                 for vid in newly_applied:
                     meta = load_json(GENERATED_DIR / f"{vid}_metadata.json")
                     if meta:
                         meta["approved"] = "external"
                         meta.pop("publish_at", None)  # consumed — clean up
                         save_json(GENERATED_DIR / f"{vid}_metadata.json", meta)
+                    # Also update the in-memory copy: _load_data() autosaves the
+                    # on-screen card, which would otherwise write back approved=True.
+                    if vid in self._metadata:
+                        self._metadata[vid]["approved"] = "external"
+                        self._metadata[vid].pop("publish_at", None)
 
                 # Update videos.json so the filter reflects current YouTube state
                 _vids = load_json(VIDEOS_JSON) or []
@@ -2689,8 +2699,17 @@ class R4VReviewApp:
                     _p["pending_video_ids"] = [v for v in _pending if v not in _vid_set]
                     save_json(UI_PREFS_JSON, _p)
 
-                self._load_data()
+                self._load_data(skip_autosave=True)
                 count = len(newly_applied)
+
+                failed_ids = [vid for vid in pushed_ids if vid not in newly_applied]
+                if failed_ids or rc != 0:
+                    messagebox.showwarning(
+                        "Some videos did not push",
+                        f"{len(failed_ids)} video(s) were NOT updated on YouTube and are still Approved "
+                        f"(push exit code {rc}):\n" + "\n".join(failed_ids) +
+                        "\n\nCheck the progress log, then push again.",
+                    )
 
                 if is_scheduled:
                     first_ts = schedule_map.get(pushed_ids[0], "")[:16].replace("T", " ") if pushed_ids else ""
@@ -2729,7 +2748,7 @@ class R4VReviewApp:
             else:
                 messagebox.showerror(
                     "Push failed",
-                    f"The push command exited with error code {rc}.\n"
+                    f"No videos were updated on YouTube (push exit code {rc}).\n"
                     "Check the progress log for details.",
                 )
 
